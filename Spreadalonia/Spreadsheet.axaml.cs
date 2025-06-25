@@ -24,6 +24,7 @@ using Avalonia.Layout;
 using Avalonia.Markup.Xaml;
 using Avalonia.Media;
 using Fare;
+using Spreadalonia.Formula;
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
@@ -80,6 +81,12 @@ namespace Spreadalonia
         /// The data contained in the spreadsheet. Please do not change this directly, or you will mess up the Undo/Redo stack.
         /// </summary>
         public Dictionary<(int, int), string> Data => IsInitialized ? ContentTable.Data : null;
+
+        /// <summary>
+        /// The formula engine used for parsing and evaluating cell formulas.
+        /// Access this to register custom business functions via <see cref="FormulaEngine.Functions"/>.
+        /// </summary>
+        public FormulaEngine FormulaEngine { get; } = new FormulaEngine();
 
         /// <summary>
         /// Defines the <see cref="DefaultTextAlignment"/> property.
@@ -432,6 +439,20 @@ namespace Spreadalonia
         {
             InitializeComponent();
 
+            // Wire up formula engine to the table
+            ContentTable.FormulaEngine = this.FormulaEngine;
+
+            // Set the data accessor so formula engine can read cell values
+            this.FormulaEngine.SetDataAccessor((col, row) =>
+            {
+                if (ContentTable.FormulaCells != null &&
+                    ContentTable.FormulaCells.TryGetValue((col, row), out CellData formulaCell))
+                    return formulaCell;
+                if (ContentTable.Data.TryGetValue((col, row), out string rawText))
+                    return CellData.FromText(rawText);
+                return null;
+            });
+
             HorizontalHeaderControl.FontFamily = this.HeaderFontFamily;
             VerticalHeaderControl.FontFamily = this.HeaderFontFamily;
 
@@ -604,19 +625,72 @@ namespace Spreadalonia
                     string newText = EditingBox.Text;
 
                     bool present = ContentTable.Data.TryGetValue(this.EditingCell, out string prevVal);
+                    bool wasFormula = ContentTable.FormulaCells != null &&
+                                      ContentTable.FormulaCells.ContainsKey(this.EditingCell);
 
                     if ((present && prevVal != newText) || (!present && !string.IsNullOrEmpty(newText)))
                     {
-
-                        if (!string.IsNullOrEmpty(newText))
+                        // Handle formula cells
+                        if (newText.StartsWith("=") && newText.Length > 1)
                         {
-                            this.UndoStack.Push(new StackFrame<(int, int), string>(ImmutableList.Create(new SelectionRange(this.EditingCell)), new Dictionary<(int, int), string>() { { this.EditingCell, prevVal } }, new Dictionary<(int, int), string>() { { this.EditingCell, newText } }));
+                            string formula = newText.Substring(1);
+                            var result = this.FormulaEngine.Evaluate(this.EditingCell, formula);
+
+                            // Store raw formula text in Data for serialization
+                            var newData = new Dictionary<(int, int), string>() { { this.EditingCell, newText } };
+                            var prevData = new Dictionary<(int, int), string>();
+                            if (present) prevData[this.EditingCell] = prevVal;
+                            else prevData[this.EditingCell] = null;
+
+                            this.UndoStack.Push(new StackFrame<(int, int), string>(
+                                ImmutableList.Create(new SelectionRange(this.EditingCell)),
+                                prevData, newData));
                             ContentTable.Data[this.EditingCell] = newText;
+
+                            // Store formula result for display
+                            ContentTable.FormulaCells[this.EditingCell] = result;
+
+                            // Trigger cascade recalculation
+                            var cascadeResults = this.FormulaEngine.CascadeRecalculate(this.EditingCell);
+                            foreach (var kvp in cascadeResults)
+                            {
+                                ContentTable.FormulaCells[kvp.Key] = kvp.Value;
+                            }
                         }
                         else
                         {
-                            this.UndoStack.Push(new StackFrame<(int, int), string>(ImmutableList.Create(new SelectionRange(this.EditingCell)), new Dictionary<(int, int), string>() { { this.EditingCell, prevVal } }, new Dictionary<(int, int), string>() { { this.EditingCell, null } }));
-                            ContentTable.Data.Remove(this.EditingCell);
+                            // Plain text cell
+                            if (!string.IsNullOrEmpty(newText))
+                            {
+                                this.UndoStack.Push(new StackFrame<(int, int), string>(
+                                    ImmutableList.Create(new SelectionRange(this.EditingCell)),
+                                    new Dictionary<(int, int), string>() { { this.EditingCell, prevVal } },
+                                    new Dictionary<(int, int), string>() { { this.EditingCell, newText } }));
+                                ContentTable.Data[this.EditingCell] = newText;
+                            }
+                            else
+                            {
+                                this.UndoStack.Push(new StackFrame<(int, int), string>(
+                                    ImmutableList.Create(new SelectionRange(this.EditingCell)),
+                                    new Dictionary<(int, int), string>() { { this.EditingCell, prevVal } },
+                                    new Dictionary<(int, int), string>() { { this.EditingCell, null } }));
+                                ContentTable.Data.Remove(this.EditingCell);
+                            }
+
+                            // If this was a formula cell, remove formula data from engine
+                            if (wasFormula)
+                            {
+                                ContentTable.FormulaCells.Remove(this.EditingCell);
+                                this.FormulaEngine.RemoveCell(this.EditingCell);
+                            }
+
+                            // Always trigger cascade recalculation: formula cells that
+                            // reference this cell need to be updated with the new value.
+                            var cascadeResults = this.FormulaEngine.CascadeRecalculate(this.EditingCell);
+                            foreach (var kvp in cascadeResults)
+                            {
+                                ContentTable.FormulaCells[kvp.Key] = kvp.Value;
+                            }
                         }
 
                         this.PushNonDataStackNull();
@@ -791,6 +865,14 @@ namespace Spreadalonia
                     if (!table.Data.TryGetValue((EditingCell.Item1, EditingCell.Item2), out string txt))
                     {
                         txt = "";
+                    }
+
+                    // If this is a formula cell, show the formula with "=" prefix when editing
+                    if (table.FormulaCells != null &&
+                        table.FormulaCells.TryGetValue(EditingCell, out CellData formulaCell) &&
+                        formulaCell.IsFormula)
+                    {
+                        txt = formulaCell.RawText; // "=SUM(A1:A5)"
                     }
 
                     if (!table.CellTypefaces.TryGetValue(EditingCell, out Typeface face) &&
@@ -1435,6 +1517,23 @@ namespace Spreadalonia
         {
             if (this.Selection.Count > 0)
             {
+                // Clear formula cells in the selection first
+                foreach (var sel in this.Selection)
+                {
+                    for (int col = sel.Left; col <= sel.Right; col++)
+                    {
+                        for (int row = sel.Top; row <= sel.Bottom; row++)
+                        {
+                            var key = (col, row);
+                            if (ContentTable.FormulaCells.ContainsKey(key))
+                            {
+                                ContentTable.FormulaCells.Remove(key);
+                                this.FormulaEngine.RemoveCell(key);
+                            }
+                        }
+                    }
+                }
+
                 ContentTable.Data = ContentTable.Data.Remove(this.Selection, this.UndoStack);
                 PushNonDataStackNull();
                 this.ClearRedoStack();
@@ -1656,6 +1755,9 @@ namespace Spreadalonia
                     this.Selection = selection;
                 }
 
+                // Sync formula cells after undo
+                SyncFormulaCellsAfterUndoRedo(selection);
+
                 table.InvalidateVisual();
                 HorizontalHeaderControl.InvalidateVisual();
                 VerticalHeaderControl.InvalidateVisual();
@@ -1694,6 +1796,9 @@ namespace Spreadalonia
                     this.Selection = selection;
                 }
 
+                // Sync formula cells after redo
+                SyncFormulaCellsAfterUndoRedo(selection);
+
                 table.InvalidateVisual();
                 HorizontalHeaderControl.InvalidateVisual();
                 VerticalHeaderControl.InvalidateVisual();
@@ -1701,6 +1806,52 @@ namespace Spreadalonia
 
             this.CanUndo = this.UndoStack.Count > 0;
             this.CanRedo = this.RedoStack.Count > 0;
+        }
+
+        /// <summary>
+        /// Synchronizes formula cells after an Undo/Redo operation.
+        /// For each cell in the affected selection, if it contains a formula,
+        /// re-evaluates it and updates the FormulaCells cache.
+        /// </summary>
+        private void SyncFormulaCellsAfterUndoRedo(ImmutableList<SelectionRange> selection)
+        {
+            if (selection == null) return;
+            var table = ContentTable;
+
+            foreach (var sel in selection)
+            {
+                for (int col = sel.Left; col <= sel.Right; col++)
+                {
+                    for (int row = sel.Top; row <= sel.Bottom; row++)
+                    {
+                        var key = (col, row);
+
+                        if (table.Data.TryGetValue(key, out string txt) &&
+                            txt != null && txt.StartsWith("=") && txt.Length > 1)
+                        {
+                            string formula = txt.Substring(1);
+                            try
+                            {
+                                var result = this.FormulaEngine.Evaluate(key, formula);
+                                table.FormulaCells[key] = result;
+                            }
+                            catch
+                            {
+                                table.FormulaCells[key] = CellData.FromError(formula, "Evaluation error");
+                            }
+                        }
+                        else
+                        {
+                            // Not a formula cell, remove any stale formula cache
+                            if (table.FormulaCells.ContainsKey(key))
+                            {
+                                table.FormulaCells.Remove(key);
+                                this.FormulaEngine.RemoveCell(key);
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         internal void PushNonDataStackNull()
@@ -2760,10 +2911,39 @@ namespace Spreadalonia
                 if (!string.IsNullOrEmpty(kvp.Value))
                 {
                     this.Data[kvp.Key] = kvp.Value;
+
+                    // Handle formula cells
+                    if (kvp.Value.StartsWith("=") && kvp.Value.Length > 1)
+                    {
+                        string formula = kvp.Value.Substring(1);
+                        try
+                        {
+                            var result = this.FormulaEngine.Evaluate(kvp.Key, formula);
+                            ContentTable.FormulaCells[kvp.Key] = result;
+                        }
+                        catch
+                        {
+                            ContentTable.FormulaCells[kvp.Key] = CellData.FromError(formula, "Evaluation error");
+                        }
+                    }
+                    else
+                    {
+                        // Plain text - remove any old formula cache
+                        if (ContentTable.FormulaCells.ContainsKey(kvp.Key))
+                        {
+                            ContentTable.FormulaCells.Remove(kvp.Key);
+                            this.FormulaEngine.RemoveCell(kvp.Key);
+                        }
+                    }
                 }
                 else
                 {
                     this.Data.Remove(kvp.Key);
+                    if (ContentTable.FormulaCells.ContainsKey(kvp.Key))
+                    {
+                        ContentTable.FormulaCells.Remove(kvp.Key);
+                        this.FormulaEngine.RemoveCell(kvp.Key);
+                    }
                 }
             }
 
@@ -2774,7 +2954,49 @@ namespace Spreadalonia
                 this.ClearRedoStack();
             }
 
+            // Trigger cascade recalculation for all changed cells.
+            // Formula cells that reference any of the changed cells need to update.
+            foreach (var key in selection)
+            {
+                var cascadeResults = this.FormulaEngine.CascadeRecalculate(key);
+                foreach (var kvp in cascadeResults)
+                {
+                    ContentTable.FormulaCells[kvp.Key] = kvp.Value;
+                }
+            }
+
             ContentTable.InvalidateVisual();
+        }
+
+        /// <summary>
+        /// Recalculates all formula cells in the spreadsheet.
+        /// Useful when data has been modified in bulk and you want to refresh
+        /// all formulas at once for efficiency, rather than cascading after each edit.
+        /// </summary>
+        public void RecalculateAll()
+        {
+            var table = ContentTable;
+            if (table == null || table.Data == null) return;
+
+            // Re-evaluate every formula cell
+            foreach (var kvp in table.Data)
+            {
+                if (kvp.Value != null && kvp.Value.StartsWith("=") && kvp.Value.Length > 1)
+                {
+                    string formula = kvp.Value.Substring(1);
+                    try
+                    {
+                        var result = this.FormulaEngine.Evaluate(kvp.Key, formula);
+                        table.FormulaCells[kvp.Key] = result;
+                    }
+                    catch
+                    {
+                        table.FormulaCells[kvp.Key] = CellData.FromError(formula, "Evaluation error");
+                    }
+                }
+            }
+
+            table.InvalidateVisual();
         }
 
 
@@ -3999,11 +4221,47 @@ namespace Spreadalonia
             table.ColumnTypefaces.Clear();
             table.ColumnWidths.Clear();
 
+            // Clear formula data
+            table.FormulaCells.Clear();
+            this.FormulaEngine.Clear();
+
+            // First pass: load all raw data
             for (int i = 0; i < splittedData.Length; i++)
             {
                 for (int j = 0; j < splittedData[i].Length; j++)
                 {
                     table.Data[(j, i)] = splittedData[i][j];
+                }
+            }
+
+            // Second pass: evaluate formula cells
+            // Update the data accessor to point to the loaded data
+            this.FormulaEngine.SetDataAccessor((col, row) =>
+            {
+                if (ContentTable.FormulaCells != null &&
+                    ContentTable.FormulaCells.TryGetValue((col, row), out CellData fc))
+                    return fc;
+                if (ContentTable.Data.TryGetValue((col, row), out string rt))
+                    return CellData.FromText(rt);
+                return null;
+            });
+
+            // Find and evaluate formula cells
+            foreach (var kvp in table.Data)
+            {
+                if (kvp.Value != null && kvp.Value.StartsWith("=") && kvp.Value.Length > 1)
+                {
+                    string formula = kvp.Value.Substring(1);
+                    try
+                    {
+                        var result = this.FormulaEngine.Evaluate(kvp.Key, formula);
+                        table.FormulaCells[kvp.Key] = result;
+                    }
+                    catch
+                    {
+                        // Store error result
+                        table.FormulaCells[kvp.Key] = CellData.FromError(formula, "Evaluation error");
+                    }
                 }
             }
 

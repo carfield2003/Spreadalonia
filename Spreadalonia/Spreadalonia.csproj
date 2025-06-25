@@ -2,6 +2,7 @@
 
   <PropertyGroup>
     <TargetFramework>netstandard2.0</TargetFramework>
+    <LangVersion>8.0</LangVersion>
 	<AssemblyName>Spreadalonia</AssemblyName>
 	<RootNamespace>Spreadalonia</RootNamespace>
 	<Authors>Giorgio Bianchini</Authors>

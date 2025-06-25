@@ -23,6 +23,7 @@ using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Spreadalonia.Formula;
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
@@ -130,6 +131,18 @@ namespace Spreadalonia
 
 
         public Dictionary<(int, int), string> Data { get; internal set; }
+
+        /// <summary>
+        /// Stores the parsed and evaluated formula data for cells that contain formulas.
+        /// Key: (col, row), Value: CellData with formula info and cached value.
+        /// </summary>
+        public Dictionary<(int, int), CellData> FormulaCells { get; internal set; }
+
+        /// <summary>
+        /// Reference to the formula engine for evaluation.
+        /// </summary>
+        public FormulaEngine FormulaEngine { get; set; }
+
         public Dictionary<int, double> RowHeights { get; internal set; }
         public Dictionary<int, double> ColumnWidths { get; internal set; }
 
@@ -194,6 +207,7 @@ namespace Spreadalonia
         public Table()
         {
             Data = new Dictionary<(int, int), string>();
+            FormulaCells = new Dictionary<(int, int), CellData>();
 
             RowHeights = new Dictionary<int, double>();
             ColumnWidths = new Dictionary<int, double>();
@@ -1296,6 +1310,13 @@ namespace Spreadalonia
                                 {
                                     if (!Container.IsEditing || left + x != Container.EditingCell.Item1 || top + y != Container.EditingCell.Item2)
                                     {
+                                        // Determine display text: use formula result if available, otherwise raw text
+                                        string displayText = txt;
+                                        if (FormulaCells != null && FormulaCells.TryGetValue((left + x, top + y), out CellData formulaCell))
+                                        {
+                                            displayText = formulaCell.DisplayText;
+                                        }
+
                                         if (!CellTypefaces.TryGetValue((left + x, top + y), out Typeface face) &&
                                             !RowTypefaces.TryGetValue(top + y, out face) &&
                                             !ColumnTypefaces.TryGetValue(left + x, out face))
@@ -1328,17 +1349,17 @@ namespace Spreadalonia
                                         double realX = x == 0 ? 0 : xs[x - 1];
                                         double realY = y == 0 ? 0 : ys[y - 1];
 
-                                        FormattedText fmtText = new FormattedText(txt, CultureInfo.CurrentCulture, FlowDirection.LeftToRight, face, this.FontSize, brs);
+                                        FormattedText fmtText = new FormattedText(displayText, CultureInfo.CurrentCulture, FlowDirection.LeftToRight, face, this.FontSize, brs);
 
                                         double textWidth = fmtText.Width;
 
                                         IBrush colourBrush = null;
 
-                                        if (this.Container.ShowColorPreview && txt.StartsWith("#") && (txt.Length == 7 || txt.Length == 9))
+                                        if (this.Container.ShowColorPreview && displayText.StartsWith("#") && (displayText.Length == 7 || displayText.Length == 9))
                                         {
                                             try
                                             {
-                                                colourBrush = Brush.Parse(txt.Length == 7 ? txt : ("#" + txt.Substring(7, 2) + txt.Substring(1, 6)));
+                                                colourBrush = Brush.Parse(displayText.Length == 7 ? displayText : ("#" + displayText.Substring(7, 2) + displayText.Substring(1, 6)));
                                                 textWidth += this.FontSize + 3;
                                             }
                                             catch
