@@ -15,7 +15,7 @@ The library is released under the [LGPLv3](https://www.gnu.org/licenses/lgpl-3.0
 
 ## Getting started
 
-The library targets .NET Standard 2.0, thus it can be used in projects that target .NET Standard 2.0+ and .NET Core 2.0+. Currently, it only supports Avalonia 0.10, but support for Avalonia 11 will come at some point.
+The library targets .NET Standard 2.0, thus it can be used in projects that target .NET Standard 2.0+ and .NET Core 2.0+. The latest version supports Avalonia 11, versions up to 1.0.4 support Avalonia 0.10.
 
 To use the library in your project, you should install the [Spreadalonia Nuget package](https://www.nuget.org/packages/Spreadalonia/). The library provides the `Spreadalonia.Spreadsheet` control, which you can include in an Avalonia `Window`.
 
