@@ -158,6 +158,76 @@ namespace Spreadalonia
         public Dictionary<(int, int), VerticalAlignment> CellVerticalAlignment { get; internal set; }
         public Dictionary<(int, int), Thickness> CellMargin { get; internal set; }
 
+        /// <summary>
+        /// The font size of each cell, indexed by (column, row). If a cell is not present in this
+        /// dictionary, the <see cref="Table.FontSize"/> value is used.
+        /// </summary>
+        public Dictionary<(int, int), double> CellFontSize { get; internal set; } = new Dictionary<(int, int), double>();
+
+        private List<CellBackground> _cellBackgrounds = new List<CellBackground>();
+
+        /// <summary>
+        /// The backgrounds to be applied to ranges of cells. Backgrounds are drawn below the grid lines.
+        /// </summary>
+        public List<CellBackground> CellBackgrounds
+        {
+            get { return _cellBackgrounds; }
+            set { _cellBackgrounds = value ?? new List<CellBackground>(); InvalidateVisual(); }
+        }
+
+        private List<CellBorder> _cellBorders = new List<CellBorder>();
+
+        /// <summary>
+        /// The border line segments to be drawn on top of the grid lines.
+        /// </summary>
+        public List<CellBorder> CellBorders
+        {
+            get { return _cellBorders; }
+            set { _cellBorders = value ?? new List<CellBorder>(); InvalidateVisual(); }
+        }
+
+        /// <summary>
+        /// Adds a background to a range of cells and schedules a redraw.
+        /// </summary>
+        /// <param name="range">The range of cells the background is applied to.</param>
+        /// <param name="brush">The brush used to fill the background.</param>
+        public void AddCellBackground(SelectionRange range, IBrush brush)
+        {
+            _cellBackgrounds.Add(new CellBackground(range, brush));
+            InvalidateVisual();
+        }
+
+        /// <summary>
+        /// Removes all cell backgrounds and schedules a redraw.
+        /// </summary>
+        public void ClearCellBackgrounds()
+        {
+            _cellBackgrounds.Clear();
+            InvalidateVisual();
+        }
+
+        /// <summary>
+        /// Adds a border line segment and schedules a redraw.
+        /// </summary>
+        /// <param name="border">The border to add.</param>
+        public void AddCellBorder(CellBorder border)
+        {
+            if (border != null)
+            {
+                _cellBorders.Add(border);
+                InvalidateVisual();
+            }
+        }
+
+        /// <summary>
+        /// Removes all border line segments and schedules a redraw.
+        /// </summary>
+        public void ClearCellBorders()
+        {
+            _cellBorders.Clear();
+            InvalidateVisual();
+        }
+
         public static readonly StyledProperty<TextAlignment> DefaultTextAlignmentProperty = AvaloniaProperty.Register<Table, TextAlignment>(nameof(DefaultTextAlignment), TextAlignment.Left);
 
         public TextAlignment DefaultTextAlignment
@@ -183,9 +253,22 @@ namespace Spreadalonia
             set { SetValue(DefaultMarginProperty, value); }
         }
 
+        public static readonly StyledProperty<ImmutableList<SelectionRange>> MergedRangesProperty = AvaloniaProperty.Register<Table, ImmutableList<SelectionRange>>(nameof(MergedRanges), ImmutableList.Create<SelectionRange>());
+
+        /// <summary>
+        /// The ranges of cells that are merged together. The content of the top-left cell of each
+        /// range is drawn centred over the whole merged range, and grid lines inside the merged
+        /// range are suppressed.
+        /// </summary>
+        public ImmutableList<SelectionRange> MergedRanges
+        {
+            get { return GetValue(MergedRangesProperty); }
+            set { SetValue(MergedRangesProperty, value ?? ImmutableList.Create<SelectionRange>()); }
+        }
+
         static Table()
         {
-            AffectsRender<Table>(OffsetProperty, DefaultColumnWidthProperty, DefaultRowHeightProperty, GridColorProperty, SelectionProperty, ForegroundProperty, BackgroundProperty, FontFamilyProperty, FontSizeProperty, FontStyleProperty, FontWeightProperty, SelectionAccentProperty, IsFocusedProperty, DefaultMarginProperty);
+            AffectsRender<Table>(OffsetProperty, DefaultColumnWidthProperty, DefaultRowHeightProperty, GridColorProperty, SelectionProperty, ForegroundProperty, BackgroundProperty, FontFamilyProperty, FontSizeProperty, FontStyleProperty, FontWeightProperty, SelectionAccentProperty, IsFocusedProperty, DefaultMarginProperty, MergedRangesProperty);
         }
 
         protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
@@ -1055,6 +1138,28 @@ namespace Spreadalonia
             }
             else
             {
+                // If the pressed cell belongs to a merged range, redirect the interaction to the
+                // top-left cell of the merge so that selection and editing act on the whole range.
+                SelectionRange pressedSelection = new SelectionRange(x + lastDrawnLeft, y + lastDrawnTop, x + lastDrawnLeft, y + lastDrawnTop);
+
+                if (x >= 0 && y >= 0 && MergedRanges != null && MergedRanges.Count > 0)
+                {
+                    int pressedColumn = x + lastDrawnLeft;
+                    int pressedRow = y + lastDrawnTop;
+
+                    foreach (SelectionRange mergedRange in MergedRanges)
+                    {
+                        if (pressedColumn >= mergedRange.Left && pressedColumn <= mergedRange.Right &&
+                            pressedRow >= mergedRange.Top && pressedRow <= mergedRange.Bottom)
+                        {
+                            x = mergedRange.Left - lastDrawnLeft;
+                            y = mergedRange.Top - lastDrawnTop;
+                            pressedSelection = mergedRange;
+                            break;
+                        }
+                    }
+                }
+
                 if (currentPoint.Properties.IsLeftButtonPressed && e.ClickCount == 1)
                 {
                     if (e.KeyModifiers == Spreadsheet.ControlModifier)
@@ -1072,14 +1177,14 @@ namespace Spreadalonia
 
                         if (!found)
                         {
-                            this.Container.Selection = this.Container.Selection.Add(new SelectionRange(x + lastDrawnLeft, y + lastDrawnTop, x + lastDrawnLeft, y + lastDrawnTop));
+                            this.Container.Selection = this.Container.Selection.Add(pressedSelection);
                             selectionStart = (x + lastDrawnLeft, y + lastDrawnTop);
                             selectionMode = 0;
                         }
                         else
                         {
                             previousSelection = this.Container.Selection;
-                            this.Container.Selection = this.Container.Selection.Difference(new SelectionRange(x + lastDrawnLeft, y + lastDrawnTop, x + lastDrawnLeft, y + lastDrawnTop));
+                            this.Container.Selection = this.Container.Selection.Difference(pressedSelection);
                             selectionStart = (x + lastDrawnLeft, y + lastDrawnTop);
                             selectionMode = 1;
                         }
@@ -1120,7 +1225,7 @@ namespace Spreadalonia
                     }
                     else
                     {
-                        this.Container.Selection = ImmutableList.Create(new SelectionRange(x + lastDrawnLeft, y + lastDrawnTop, x + lastDrawnLeft, y + lastDrawnTop));
+                        this.Container.Selection = ImmutableList.Create(pressedSelection);
                         selectionStart = (x + lastDrawnLeft, y + lastDrawnTop);
                         selectionMode = 0;
                     }
@@ -1142,7 +1247,7 @@ namespace Spreadalonia
 
                     if (!found)
                     {
-                        this.Container.Selection = ImmutableList.Create(new SelectionRange(x + lastDrawnLeft, y + lastDrawnTop, x + lastDrawnLeft, y + lastDrawnTop));
+                        this.Container.Selection = ImmutableList.Create(pressedSelection);
                     }
 
                     selectionStart = (x + lastDrawnLeft, y + lastDrawnTop);
@@ -1278,11 +1383,6 @@ namespace Spreadalonia
                         double currX = 0;
                         for (int x = 0; x <= width; x++)
                         {
-                            if (x + left > 0)
-                            {
-                                context.DrawLine(gridPen, new Point(currX, 0).SnapToDevicePixels(this), new Point(currX, actualHeight).SnapToDevicePixels(this));
-                            }
-
                             currX += GetWidth(left + x);
                             xs[x] = currX;
                         }
@@ -1290,11 +1390,6 @@ namespace Spreadalonia
                         double currY = 0;
                         for (int y = 0; y <= height; y++)
                         {
-                            if (y + top > 0)
-                            {
-                                context.DrawLine(gridPen, new Point(0, currY).SnapToDevicePixels(this), new Point(actualWidth, currY).SnapToDevicePixels(this));
-                            }
-
                             currY += GetHeight(top + y);
                             ys[y] = currY;
                         }
@@ -1302,12 +1397,98 @@ namespace Spreadalonia
                         lastDrawnXs = xs;
                         lastDrawnYs = ys;
 
+                        // Draw vertical grid lines, skipping the interior of merged ranges
+                        for (int x = 0; x <= width; x++)
+                        {
+                            if (x + left > 0)
+                            {
+                                int lineIndex = left + x - 1;
+
+                                foreach ((int segmentStart, int segmentEnd) in GetVisibleLineSegments(top, top + height - 1, lineIndex, false))
+                                {
+                                    double lineY0 = segmentStart == top ? 0 : ys[segmentStart - top - 1];
+                                    double lineY1 = segmentEnd == top + height - 1 ? ys[height] : ys[segmentEnd - top];
+
+                                    context.DrawLine(gridPen, new Point(xs[x], lineY0).SnapToDevicePixels(this), new Point(xs[x], lineY1).SnapToDevicePixels(this));
+                                }
+                            }
+                        }
+
+                        // Draw horizontal grid lines, skipping the interior of merged ranges
+                        for (int y = 0; y <= height; y++)
+                        {
+                            if (y + top > 0)
+                            {
+                                int lineIndex = top + y - 1;
+
+                                foreach ((int segmentStart, int segmentEnd) in GetVisibleLineSegments(left, left + width - 1, lineIndex, true))
+                                {
+                                    double lineX0 = segmentStart == left ? 0 : xs[segmentStart - left - 1];
+                                    double lineX1 = segmentEnd == left + width - 1 ? xs[width] : xs[segmentEnd - left];
+
+                                    context.DrawLine(gridPen, new Point(lineX0, ys[y]).SnapToDevicePixels(this), new Point(lineX1, ys[y]).SnapToDevicePixels(this));
+                                }
+                            }
+                        }
+
+                        // Draw cell backgrounds on top of the grid lines (they are painted over the
+                        // default grid, while explicitly defined borders are drawn on top of them)
+                        if (_cellBackgrounds.Count > 0)
+                        {
+                            foreach (CellBackground cellBackground in _cellBackgrounds)
+                            {
+                                if (cellBackground == null || cellBackground.Brush == null)
+                                {
+                                    continue;
+                                }
+
+                                SelectionRange visibleBackground = cellBackground.Range.Intersection(new SelectionRange(left, top, left + width - 1, top + height - 1));
+
+                                if (visibleBackground.Width > 0 && visibleBackground.Height > 0)
+                                {
+                                    double backgroundX0 = visibleBackground.Left == left ? 0 : xs[visibleBackground.Left - left - 1];
+                                    double backgroundY0 = visibleBackground.Top == top ? 0 : ys[visibleBackground.Top - top - 1];
+                                    double backgroundX1 = visibleBackground.Right - left < width ? xs[visibleBackground.Right - left] : xs[width];
+                                    double backgroundY1 = visibleBackground.Bottom - top < height ? ys[visibleBackground.Bottom - top] : ys[height];
+
+                                    context.FillRectangle(cellBackground.Brush, new Rect(backgroundX0, backgroundY0, backgroundX1 - backgroundX0, backgroundY1 - backgroundY0));
+                                }
+                            }
+                        }
+
+                        // Cells covered by merged ranges (excluding their top-left cell) are drawn
+                        // as part of the merged range, so they are skipped here.
+                        HashSet<(int, int)> mergedCells = null;
+                        if (MergedRanges.Count > 0)
+                        {
+                            mergedCells = new HashSet<(int, int)>();
+                            foreach (SelectionRange mergedRange in MergedRanges)
+                            {
+                                for (int mergedRow = mergedRange.Top; mergedRow <= mergedRange.Bottom; mergedRow++)
+                                {
+                                    for (int mergedColumn = mergedRange.Left; mergedColumn <= mergedRange.Right; mergedColumn++)
+                                    {
+                                        // The whole merged range is skipped here: the merged-range text
+                                        // drawing code below draws the top-left cell content centred
+                                        // over the entire range. Including the top-left cell in this
+                                        // list avoids drawing the same text twice.
+                                        mergedCells.Add((mergedColumn, mergedRow));
+                                    }
+                                }
+                            }
+                        }
+
                         for (int y = 0; y <= height; y++)
                         {
                             for (int x = 0; x <= width; x++)
                             {
                                 if (Data.TryGetValue((left + x, top + y), out string txt))
                                 {
+                                    if (mergedCells != null && mergedCells.Contains((left + x, top + y)))
+                                    {
+                                        continue;
+                                    }
+
                                     if (!Container.IsEditing || left + x != Container.EditingCell.Item1 || top + y != Container.EditingCell.Item2)
                                     {
                                         // Determine display text: use formula result if available, otherwise raw text
@@ -1349,7 +1530,13 @@ namespace Spreadalonia
                                         double realX = x == 0 ? 0 : xs[x - 1];
                                         double realY = y == 0 ? 0 : ys[y - 1];
 
-                                        FormattedText fmtText = new FormattedText(displayText, CultureInfo.CurrentCulture, FlowDirection.LeftToRight, face, this.FontSize, brs);
+                                        double cellFontSize = this.FontSize;
+                                        if (CellFontSize.TryGetValue((left + x, top + y), out double customFontSize))
+                                        {
+                                            cellFontSize = customFontSize;
+                                        }
+
+                                        FormattedText fmtText = new FormattedText(displayText, CultureInfo.CurrentCulture, FlowDirection.LeftToRight, face, cellFontSize, brs);
 
                                         double textWidth = fmtText.Width;
 
@@ -1360,7 +1547,7 @@ namespace Spreadalonia
                                             try
                                             {
                                                 colourBrush = Brush.Parse(displayText.Length == 7 ? displayText : ("#" + displayText.Substring(7, 2) + displayText.Substring(1, 6)));
-                                                textWidth += this.FontSize + 3;
+                                                textWidth += cellFontSize + 3;
                                             }
                                             catch
                                             {
@@ -1403,18 +1590,224 @@ namespace Spreadalonia
                                             }
                                             else
                                             {
-                                                double rectY = realY + fmtText.Height * 0.5 - this.FontSize * 0.5;
+                                                double rectY = realY + fmtText.Height * 0.5 - cellFontSize * 0.5;
 
                                                 if (txt.Length == 9)
                                                 {
-                                                    context.DrawRectangle(gridPen.Brush, null, new Rect(new Point(realX, rectY).SnapToDevicePixels(this), new Point(realX + this.FontSize * 0.5, rectY + this.FontSize * 0.5).SnapToDevicePixels(this)), 0, 0);
-                                                    context.DrawRectangle(gridPen.Brush, null, new Rect(new Point(realX + this.FontSize * 0.5, rectY + this.FontSize * 0.5).SnapToDevicePixels(this), new Point(realX + this.FontSize, rectY + this.FontSize).SnapToDevicePixels(this)), 0, 0);
+                                                    context.DrawRectangle(gridPen.Brush, null, new Rect(new Point(realX, rectY).SnapToDevicePixels(this), new Point(realX + cellFontSize * 0.5, rectY + cellFontSize * 0.5).SnapToDevicePixels(this)), 0, 0);
+                                                    context.DrawRectangle(gridPen.Brush, null, new Rect(new Point(realX + cellFontSize * 0.5, rectY + cellFontSize * 0.5).SnapToDevicePixels(this), new Point(realX + cellFontSize, rectY + cellFontSize).SnapToDevicePixels(this)), 0, 0);
                                                 }
 
-                                                context.DrawRectangle(colourBrush, blackPen, new Rect(new Point(realX, rectY).SnapToDevicePixels(this), new Size(this.FontSize, this.FontSize)), 0, 0);
-                                                context.DrawText(fmtText, new Point(realX + this.FontSize + 3, realY));
+                                                context.DrawRectangle(colourBrush, blackPen, new Rect(new Point(realX, rectY).SnapToDevicePixels(this), new Size(cellFontSize, cellFontSize)), 0, 0);
+                                                context.DrawText(fmtText, new Point(realX + cellFontSize + 3, realY));
                                             }
                                         }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Draw the content of merged ranges centred over the whole range
+                        if (MergedRanges.Count > 0)
+                        {
+                            foreach (SelectionRange mergedRange in MergedRanges)
+                            {
+                                // Only skip merges that are entirely outside the visible range
+                                if (mergedRange.Right < left || mergedRange.Left > left + width - 1 ||
+                                    mergedRange.Bottom < top || mergedRange.Top > top + height - 1)
+                                {
+                                    continue;
+                                }
+
+                                if (!Data.TryGetValue((mergedRange.Left, mergedRange.Top), out string mergedText))
+                                {
+                                    continue;
+                                }
+
+                                if (Container.IsEditing && Container.EditingCell.Item1 == mergedRange.Left && Container.EditingCell.Item2 == mergedRange.Top)
+                                {
+                                    continue;
+                                }
+
+                                string mergedDisplayText = mergedText;
+                                if (FormulaCells != null && FormulaCells.TryGetValue((mergedRange.Left, mergedRange.Top), out CellData mergedFormulaCell))
+                                {
+                                    mergedDisplayText = mergedFormulaCell.DisplayText;
+                                }
+
+                                if (!CellTypefaces.TryGetValue((mergedRange.Left, mergedRange.Top), out Typeface mergedFace) &&
+                                    !RowTypefaces.TryGetValue(mergedRange.Top, out mergedFace) &&
+                                    !ColumnTypefaces.TryGetValue(mergedRange.Left, out mergedFace))
+                                {
+                                    mergedFace = defaultTypeFace;
+                                }
+
+                                if (!CellForeground.TryGetValue((mergedRange.Left, mergedRange.Top), out IBrush mergedBrush) &&
+                                    !RowForeground.TryGetValue(mergedRange.Top, out mergedBrush) &&
+                                    !ColumnForeground.TryGetValue(mergedRange.Left, out mergedBrush))
+                                {
+                                    mergedBrush = this.Foreground;
+                                }
+
+                                double mergedFontSize = this.FontSize;
+                                if (CellFontSize.TryGetValue((mergedRange.Left, mergedRange.Top), out double mergedCustomFontSize))
+                                {
+                                    mergedFontSize = mergedCustomFontSize;
+                                }
+
+                                TextAlignment mergedHor = TextAlignment.Center;
+                                if (CellTextAlignment.TryGetValue((mergedRange.Left, mergedRange.Top), out TextAlignment mergedCustomHor))
+                                {
+                                    mergedHor = mergedCustomHor;
+                                }
+
+                                VerticalAlignment mergedVer = VerticalAlignment.Center;
+                                if (CellVerticalAlignment.TryGetValue((mergedRange.Left, mergedRange.Top), out VerticalAlignment mergedCustomVer))
+                                {
+                                    mergedVer = mergedCustomVer;
+                                }
+
+                                Thickness mergedMargin = new Thickness(3);
+                                if (CellMargin.TryGetValue((mergedRange.Left, mergedRange.Top), out Thickness mergedCustomMargin))
+                                {
+                                    mergedMargin = mergedCustomMargin;
+                                }
+
+                                // Clip the merged range to the visible area so partial merges still render
+                                SelectionRange visibleMerge = mergedRange.Intersection(new SelectionRange(left, top, left + width - 1, top + height - 1));
+
+                                double mergedX0 = visibleMerge.Left == left ? 0 : xs[visibleMerge.Left - left - 1];
+                                double mergedY0 = visibleMerge.Top == top ? 0 : ys[visibleMerge.Top - top - 1];
+                                double mergedX1 = visibleMerge.Right - left < width ? xs[visibleMerge.Right - left] : xs[width];
+                                double mergedY1 = visibleMerge.Bottom - top < height ? ys[visibleMerge.Bottom - top] : ys[height];
+
+                                FormattedText mergedFormattedText = new FormattedText(mergedDisplayText, CultureInfo.CurrentCulture, FlowDirection.LeftToRight, mergedFace, mergedFontSize, mergedBrush);
+
+                                using (context.PushClip(new Rect(mergedX0 + 1, mergedY0 + 1, Math.Max(0, mergedX1 - mergedX0 - 2), Math.Max(0, mergedY1 - mergedY0 - 2))))
+                                {
+                                    double mergedRealX = mergedX0;
+                                    double mergedRealY = mergedY0;
+
+                                    if (mergedVer == VerticalAlignment.Top)
+                                    {
+                                        mergedRealY += mergedMargin.Top;
+                                    }
+                                    else if (mergedVer == VerticalAlignment.Bottom)
+                                    {
+                                        mergedRealY = mergedY1 - mergedMargin.Bottom - mergedFormattedText.Height;
+                                    }
+                                    else
+                                    {
+                                        mergedRealY = (mergedY0 + mergedMargin.Top + mergedY1 - mergedMargin.Bottom) * 0.5 - mergedFormattedText.Height * 0.5;
+                                    }
+
+                                    if (mergedHor == TextAlignment.Left)
+                                    {
+                                        mergedRealX += mergedMargin.Left;
+                                    }
+                                    else if (mergedHor == TextAlignment.Center)
+                                    {
+                                        mergedRealX = (mergedX0 + mergedMargin.Left + mergedX1 - mergedMargin.Right) * 0.5 - mergedFormattedText.Width * 0.5;
+                                    }
+                                    else if (mergedHor == TextAlignment.Right)
+                                    {
+                                        mergedRealX = mergedX1 - mergedMargin.Right - mergedFormattedText.Width;
+                                    }
+
+                                    context.DrawText(mergedFormattedText, new Point(mergedRealX, mergedRealY));
+                                }
+                            }
+                        }
+
+                        // Draw borders on top of the grid lines
+                        if (_cellBorders.Count > 0)
+                        {
+                            foreach (CellBorder border in _cellBorders)
+                            {
+                                if (border == null || border.Brush == null)
+                                {
+                                    continue;
+                                }
+
+                                Pen borderPen = new Pen(border.Brush, border.Thickness > 0 ? border.Thickness : 1)
+                                {
+                                    DashStyle = border.DashStyle
+                                };
+
+                                if (border.IsHorizontal)
+                                {
+                                    if (border.LineIndex < top || border.LineIndex > top + height)
+                                    {
+                                        continue;
+                                    }
+
+                                    double borderY;
+                                    if (border.LineIndex == top)
+                                    {
+                                        borderY = 0;
+                                    }
+                                    else if (border.LineIndex == top + height)
+                                    {
+                                        borderY = ys[height];
+                                    }
+                                    else
+                                    {
+                                        borderY = ys[border.LineIndex - top - 1];
+                                    }
+
+                                    int borderColumnStart = Math.Max(border.From, left);
+                                    int borderColumnEnd = Math.Min(border.To, left + width - 1);
+
+                                    if (borderColumnStart > borderColumnEnd)
+                                    {
+                                        continue;
+                                    }
+
+                                    // Skip the parts of the border that lie inside merged ranges
+                                    foreach ((int segmentStart, int segmentEnd) in GetVisibleLineSegments(borderColumnStart, borderColumnEnd, border.LineIndex, true))
+                                    {
+                                        double borderX0 = segmentStart == left ? 0 : xs[segmentStart - left - 1];
+                                        double borderX1 = segmentEnd == left + width - 1 ? xs[width] : xs[segmentEnd - left];
+
+                                        context.DrawLine(borderPen, new Point(borderX0, borderY).SnapToDevicePixels(this), new Point(borderX1, borderY).SnapToDevicePixels(this));
+                                    }
+                                }
+                                else
+                                {
+                                    if (border.LineIndex < left || border.LineIndex > left + width)
+                                    {
+                                        continue;
+                                    }
+
+                                    double borderX;
+                                    if (border.LineIndex == left)
+                                    {
+                                        borderX = 0;
+                                    }
+                                    else if (border.LineIndex == left + width)
+                                    {
+                                        borderX = xs[width];
+                                    }
+                                    else
+                                    {
+                                        borderX = xs[border.LineIndex - left - 1];
+                                    }
+
+                                    int borderRowStart = Math.Max(border.From, top);
+                                    int borderRowEnd = Math.Min(border.To, top + height - 1);
+
+                                    if (borderRowStart > borderRowEnd)
+                                    {
+                                        continue;
+                                    }
+
+                                    // Skip the parts of the border that lie inside merged ranges
+                                    foreach ((int segmentStart, int segmentEnd) in GetVisibleLineSegments(borderRowStart, borderRowEnd, border.LineIndex, false))
+                                    {
+                                        double borderY0 = segmentStart == top ? 0 : ys[segmentStart - top - 1];
+                                        double borderY1 = segmentEnd == top + height - 1 ? ys[height] : ys[segmentEnd - top];
+
+                                        context.DrawLine(borderPen, new Point(borderX, borderY0).SnapToDevicePixels(this), new Point(borderX, borderY1).SnapToDevicePixels(this));
                                     }
                                 }
                             }
@@ -1720,6 +2113,94 @@ namespace Spreadalonia
                 {
                     this.Container.SetScrollbarMaximum(actualWidth + startWidth - this.Bounds.Width + GetWidth(left + width), actualHeight + startHeight - this.Bounds.Height + GetHeight(top + height));
                 });
+            }
+        }
+
+        /// <summary>
+        /// Splits the line segment <c>[start, end]</c> (inclusive cell indices along the orthogonal
+        /// direction) into the sub-segments that are not covered by merged ranges crossing the
+        /// separator identified by <paramref name="lineIndex"/>.
+        /// </summary>
+        /// <param name="start">The first cell index of the segment.</param>
+        /// <param name="end">The last cell index of the segment (inclusive).</param>
+        /// <param name="lineIndex">The separator index. For vertical borders this is a column separator, for horizontal borders a row separator.</param>
+        /// <param name="isHorizontal"><see langword="true"/> if the segment is a horizontal (row separator) line.</param>
+        /// <returns>The visible sub-segments (inclusive pairs), skipping the parts covered by merged ranges.</returns>
+        private IEnumerable<(int, int)> GetVisibleLineSegments(int start, int end, int lineIndex, bool isHorizontal)
+        {
+            if (MergedRanges == null || MergedRanges.Count == 0)
+            {
+                yield return (start, end);
+                yield break;
+            }
+
+            List<(int, int)> blocked = null;
+
+            foreach (SelectionRange range in MergedRanges)
+            {
+                bool covered;
+
+                if (isHorizontal)
+                {
+                    // lineIndex is the absolute row-separator index (between row lineIndex-1 and lineIndex).
+                    // The separator lies inside the merged range iff lineIndex-1 is one of the merged rows,
+                    // i.e. range.Top < lineIndex && lineIndex <= range.Bottom.
+                    covered = range.Top < lineIndex && range.Bottom >= lineIndex;
+                }
+                else
+                {
+                    // Same idea for column separators: inside the range iff range.Left < lineIndex <= range.Right.
+                    covered = range.Left < lineIndex && range.Right >= lineIndex;
+                }
+
+                if (covered)
+                {
+                    int blockedFrom = isHorizontal ? range.Left : range.Top;
+                    int blockedTo = isHorizontal ? range.Right : range.Bottom;
+
+                    int from = Math.Max(start, blockedFrom);
+                    int to = Math.Min(end, blockedTo);
+
+                    if (from <= to)
+                    {
+                        if (blocked == null)
+                        {
+                            blocked = new List<(int, int)>();
+                        }
+
+                        blocked.Add((from, to));
+                    }
+                }
+            }
+
+            if (blocked == null)
+            {
+                yield return (start, end);
+                yield break;
+            }
+
+            blocked.Sort();
+
+            int current = start;
+
+            foreach ((int from, int to) in blocked)
+            {
+                if (from > current)
+                {
+                    yield return (current, from - 1);
+                }
+
+                current = Math.Max(current, to + 1);
+
+                if (current > end)
+                {
+                    yield break;
+                }
+            }
+
+            if (current <= end)
+            {
+                yield return (current, end);
             }
         }
     }

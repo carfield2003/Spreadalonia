@@ -29,6 +29,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -240,6 +241,216 @@ namespace Spreadalonia
         {
             get { return GetValue(SelectionProperty); }
             set { SetValue(SelectionProperty, value); }
+        }
+
+        /// <summary>
+        /// The ranges of cells that are merged together. The content of the top-left cell of each
+        /// range is drawn centred over the whole merged range, and the grid lines inside the merged
+        /// range are suppressed.
+        /// </summary>
+        public IReadOnlyList<SelectionRange> MergedRanges
+        {
+            get { return IsInitialized ? ContentTable.MergedRanges : ImmutableList<SelectionRange>.Empty; }
+            set
+            {
+                if (IsInitialized)
+                {
+                    ContentTable.MergedRanges = (value as ImmutableList<SelectionRange>) ?? ImmutableList.CreateRange(value ?? new List<SelectionRange>());
+                }
+            }
+        }
+
+        /// <summary>
+        /// Merges the cells in the specified range. The content of the top-left cell is displayed
+        /// centred over the whole merged range.
+        /// </summary>
+        /// <param name="range">The range of cells to merge.</param>
+        public void MergeCells(SelectionRange range)
+        {
+            if (range == null)
+            {
+                throw new ArgumentNullException(nameof(range));
+            }
+
+            if (IsInitialized)
+            {
+                ContentTable.MergedRanges = ContentTable.MergedRanges.Add(range);
+            }
+        }
+
+        /// <summary>
+        /// Removes the merge over the specified range, if present.
+        /// </summary>
+        /// <param name="range">The range of cells to unmerge.</param>
+        public void UnmergeCells(SelectionRange range)
+        {
+            if (range == null)
+            {
+                throw new ArgumentNullException(nameof(range));
+            }
+
+            if (IsInitialized)
+            {
+                ContentTable.MergedRanges = ContentTable.MergedRanges.RemoveAll(item => item == range);
+            }
+        }
+
+        /// <summary>
+        /// The backgrounds applied to ranges of cells, drawn below the grid lines.
+        /// </summary>
+        public List<CellBackground> CellBackgrounds
+        {
+            get { return IsInitialized ? ContentTable.CellBackgrounds : null; }
+            set { if (IsInitialized) ContentTable.CellBackgrounds = value; }
+        }
+
+        /// <summary>
+        /// The border line segments drawn on top of the grid lines.
+        /// </summary>
+        public List<CellBorder> CellBorders
+        {
+            get { return IsInitialized ? ContentTable.CellBorders : null; }
+            set { if (IsInitialized) ContentTable.CellBorders = value; }
+        }
+
+        /// <summary>
+        /// The font size of each cell, indexed by (column, row). Cells not present in this
+        /// dictionary use the spreadsheet <see cref="FontSize"/>.
+        /// </summary>
+        public Dictionary<(int, int), double> CellFontSize => IsInitialized ? ContentTable.CellFontSize : null;
+
+        /// <summary>
+        /// The typeface of each cell, indexed by (column, row).
+        /// </summary>
+        public Dictionary<(int, int), Typeface> CellTypefaces => IsInitialized ? ContentTable.CellTypefaces : null;
+
+        /// <summary>
+        /// The foreground brush of each cell, indexed by (column, row).
+        /// </summary>
+        public Dictionary<(int, int), IBrush> CellForeground => IsInitialized ? ContentTable.CellForeground : null;
+
+        /// <summary>
+        /// The horizontal text alignment of each cell, indexed by (column, row).
+        /// </summary>
+        public Dictionary<(int, int), TextAlignment> CellTextAlignment => IsInitialized ? ContentTable.CellTextAlignment : null;
+
+        /// <summary>
+        /// The vertical text alignment of each cell, indexed by (column, row).
+        /// </summary>
+        public Dictionary<(int, int), VerticalAlignment> CellVerticalAlignment => IsInitialized ? ContentTable.CellVerticalAlignment : null;
+
+        /// <summary>
+        /// The margin of each cell, indexed by (column, row).
+        /// </summary>
+        public Dictionary<(int, int), Thickness> CellMargin => IsInitialized ? ContentTable.CellMargin : null;
+
+        /// <summary>
+        /// Adds a background to a range of cells.
+        /// </summary>
+        /// <param name="range">The range of cells the background is applied to.</param>
+        /// <param name="brush">The brush used to fill the background.</param>
+        public void AddCellBackground(SelectionRange range, IBrush brush)
+        {
+            if (range == null)
+            {
+                throw new ArgumentNullException(nameof(range));
+            }
+
+            if (IsInitialized)
+            {
+                ContentTable.AddCellBackground(range, brush);
+            }
+        }
+
+        /// <summary>
+        /// Removes all cell backgrounds.
+        /// </summary>
+        public void ClearCellBackgrounds()
+        {
+            if (IsInitialized)
+            {
+                ContentTable.ClearCellBackgrounds();
+            }
+        }
+
+        /// <summary>
+        /// Adds a border line segment.
+        /// </summary>
+        /// <param name="border">The border to add.</param>
+        public void AddCellBorder(CellBorder border)
+        {
+            if (border == null)
+            {
+                throw new ArgumentNullException(nameof(border));
+            }
+
+            if (IsInitialized)
+            {
+                ContentTable.AddCellBorder(border);
+            }
+        }
+
+        /// <summary>
+        /// Removes all border line segments.
+        /// </summary>
+        public void ClearCellBorders()
+        {
+            if (IsInitialized)
+            {
+                ContentTable.ClearCellBorders();
+            }
+        }
+
+        /// <summary>
+        /// Forces a redraw of the spreadsheet content. This is useful after modifying the
+        /// cell-level style dictionaries (<see cref="CellFontSize"/>, <see cref="CellTypefaces"/>,
+        /// <see cref="CellForeground"/>, <see cref="CellTextAlignment"/>,
+        /// <see cref="CellVerticalAlignment"/> or <see cref="CellMargin"/>) directly.
+        /// </summary>
+        public void Refresh()
+        {
+            if (IsInitialized)
+            {
+                ContentTable.InvalidateVisual();
+                InvalidateVisual();
+            }
+        }
+
+        /// <summary>
+        /// Loads an RGF (Report Generator Format) XML document into the spreadsheet, replacing the
+        /// current data, column widths, row heights, merged ranges, cell backgrounds, cell borders
+        /// and cell-level styles.
+        /// </summary>
+        /// <param name="stream">A stream containing the RGF XML document.</param>
+        public void LoadRgf(Stream stream)
+        {
+            if (stream == null)
+            {
+                throw new ArgumentNullException(nameof(stream));
+            }
+
+            RgfData rgf = RgfParser.Load(stream);
+
+            if (!IsInitialized)
+            {
+                return;
+            }
+
+            ContentTable.Data = rgf.Data;
+            ContentTable.ColumnWidths = rgf.ColumnWidths;
+            ContentTable.RowHeights = rgf.RowHeights;
+            ContentTable.MergedRanges = ImmutableList.CreateRange(rgf.MergedRanges ?? new List<SelectionRange>());
+            ContentTable.CellBackgrounds = rgf.CellBackgrounds;
+            ContentTable.CellBorders = rgf.CellBorders;
+            ContentTable.CellTypefaces = rgf.CellTypefaces;
+            ContentTable.CellFontSize = rgf.CellFontSize;
+            ContentTable.CellForeground = rgf.CellForeground;
+            ContentTable.CellTextAlignment = rgf.CellTextAlignment;
+            ContentTable.CellVerticalAlignment = rgf.CellVerticalAlignment;
+            ContentTable.CellMargin = rgf.CellMargin;
+
+            ContentTable.InvalidateVisual();
+            InvalidateVisual();
         }
 
         /// <summary>

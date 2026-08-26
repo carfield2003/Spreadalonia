@@ -3,9 +3,16 @@
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
 		xmlns:local="using:Spreadalonia"
-        mc:Ignorable="d" Width="800" Height="500"
+        mc:Ignorable="d" Width="900" Height="560"
         x:Class="Demo.MainWindow"
-        Title="Spreadalonia - Formula Demo">
-	<local:Spreadsheet x:Name="SpreadsheetControl">
-	</local:Spreadsheet>
+        Title="Spreadalonia - Features Demo">
+	<DockPanel>
+		<StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="8" Spacing="8">
+			<Button x:Name="BasicDemoButton" Content="Basic Demo" Click="BasicDemoButton_Click"/>
+			<Button x:Name="FeaturesButton" Content="Merge / Border / Background / Style" Click="FeaturesButton_Click"/>
+			<Button x:Name="RgfButton" Content="LoadRgf Demo" Click="RgfButton_Click"/>
+		</StackPanel>
+		<local:Spreadsheet x:Name="SpreadsheetControl">
+		</local:Spreadsheet>
+	</DockPanel>
 </Window>

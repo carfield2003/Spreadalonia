@@ -1,7 +1,7 @@
 # Spreadalonia 基本功能使用说明
 
-> **版本**: 1.1.0 | **目标框架**: .NET Standard 2.0 | **UI 框架**: Avalonia 11  
-> **许可证**: LGPL v3 | **作者**: Giorgio Bianchini, University of Bristol  
+> **版本**: 1.1.1 | **目标框架**: .NET Standard 2.0 | **UI 框架**: Avalonia 11  
+> **许可证**: LGPL v3 | **作者**: Giorgio Bianchini, University of Bristol; carfield2003  
 > 本文档涵盖公式引擎以外的所有基本功能，公式引擎的使用请参考 `公式与自定义函数使用说明.md`。
 
 ---
@@ -14,14 +14,16 @@
 4. [选择与导航](#选择与导航)
 5. [行与列操作](#行与列操作)
 6. [外观与格式](#外观与格式)
-7. [剪贴板操作](#剪贴板操作)
-8. [撤销与重做](#撤销与重做)
-9. [序列化与加载](#序列化与加载)
-10. [事件](#事件)
-11. [键盘快捷键](#键盘快捷键)
-12. [右键菜单](#右键菜单)
-13. [SelectionRange 说明](#selectionrange-说明)
-14. [完整 API 速查表](#完整-api-速查表)
+7. [合并单元格与表格线](#合并单元格与表格线)
+8. [剪贴板操作](#剪贴板操作)
+9. [撤销与重做](#撤销与重做)
+10. [序列化与加载](#序列化与加载)
+11. [事件](#事件)
+12. [键盘快捷键](#键盘快捷键)
+13. [右键菜单](#右键菜单)
+14. [其他交互功能](#其他交互功能)
+15. [SelectionRange 说明](#selectionrange-结构)
+16. [完整 API 速查表](#完整-api-速查表)
 
 ---
 
@@ -32,7 +34,7 @@
 通过 NuGet 安装：
 
 ```
-Install-Package Spreadalonia
+Install-Package Spreadalonia.Carfield2003
 ```
 
 ### 在 XAML 中使用
@@ -334,6 +336,126 @@ spreadsheet.ResetFormat();
 
 ---
 
+## 合并单元格与表格线
+
+### 合并单元格
+
+Spreadalonia 支持将多个相邻单元格合并为一个区域（类似 Excel 的"合并后居中"）。合并规则：
+
+- 合并区域的**左上角单元格**内容会在整个区域内水平居中显示
+- 合并区域**内部**的网格线自动隐藏
+- 点击合并区域内的任意单元格，都会选中整个合并区域，编辑操作作用于左上角单元格
+
+```csharp
+// 方式一：直接设置合并区域列表（可一次性设置多个）
+spreadsheet.MergedRanges = new List<SelectionRange>
+{
+    new SelectionRange(0, 0, 4, 0),   // 将第 0 行的第 0~4 列合并为一个标题区
+    new SelectionRange(4, 2, 4, 3),   // 将第 4 列的第 2~3 行纵向合并
+};
+
+// 方式二：逐个添加
+spreadsheet.MergeCells(new SelectionRange(0, 0, 4, 0));
+
+// 取消某个合并
+spreadsheet.UnmergeCells(new SelectionRange(0, 0, 4, 0));
+
+// 清空所有合并区域
+spreadsheet.MergedRanges = null;
+```
+
+**SelectionRange 构造**：
+
+- `new SelectionRange(left, top, right, bottom)`：矩形区域（列、行索引均从 0 开始，含右边界与下边界）
+- `new SelectionRange(x, y)`：单个单元格
+
+> 注意：合并区域内只有左上角单元格的数据会被显示，其余单元格请保持为空。
+
+### 画表格线（单元格边框）
+
+`CellBorder` 描述一条独立的边框线段（水平线或垂直线），多条线段组合可以构成完整的外框、内部分隔线、虚线等效果。边框绘制在网格线**之上**。
+
+**CellBorder 属性**：
+
+| 属性 | 类型 | 说明 |
+| --- | --- | --- |
+| `IsHorizontal` | `bool` | `true` = 水平线（行分隔线）；`false` = 垂直线（列分隔线） |
+| `LineIndex` | `int` | 分隔线索引：垂直线中 `0` = 第 0 列左侧、`1` = 第 0/1 列之间…；水平线中 `0` = 第 0 行上方、`1` = 第 0/1 行之间… |
+| `From` | `int` | 线段起始单元格索引（垂直线 = 起始行；水平线 = 起始列） |
+| `To` | `int` | 线段结束单元格索引，**包含**（垂直线 = 结束行；水平线 = 结束列） |
+| `Brush` | `IBrush` | 线条颜色 |
+| `Thickness` | `double` | 线宽（像素） |
+| `DashStyle` | `IDashStyle?` | 虚线样式，`null` 表示实线 |
+
+```csharp
+// 方式一：直接设置边框列表
+var black = new SolidColorBrush(Colors.Black);
+
+spreadsheet.CellBorders = new List<CellBorder>
+{
+    // 外框：顶部水平线（行分隔线 0，覆盖第 0~4 列，线宽 2）
+    new CellBorder(true, 0, 0, 4, black, 2),
+    // 外框：底部水平线（行分隔线 4，覆盖第 0~4 列）
+    new CellBorder(true, 4, 0, 4, black, 2),
+    // 外框：左侧垂直线（列分隔线 0，覆盖第 0~4 行）
+    new CellBorder(false, 0, 0, 4, black, 2),
+    // 外框：右侧垂直线（列分隔线 5，覆盖第 0~4 行）
+    new CellBorder(false, 5, 0, 4, black, 2),
+    // 表头分隔线（行分隔线 2，粗线）
+    new CellBorder(true, 2, 0, 4, black, 2),
+    // 数据区分隔线（行分隔线 3，虚线：4px 实线 + 2px 间隙）
+    new CellBorder(true, 3, 0, 4, black, 1, new DashStyle(new double[] { 4, 2 }, 0)),
+    // 数据区竖向分隔线（列分隔线 1~3，覆盖第 1~3 行）
+    new CellBorder(false, 1, 1, 3, black, 1),
+    new CellBorder(false, 2, 1, 3, black, 1),
+    new CellBorder(false, 3, 1, 3, black, 1),
+};
+
+// 方式二：逐个添加 / 清除
+spreadsheet.AddCellBorder(new CellBorder(true, 0, 0, 4, black, 2));
+spreadsheet.ClearCellBorders();   // 清除所有边框线段
+```
+
+**快速理解 `LineIndex` / `From` / `To`**：把表格想象成棋盘，水平线与垂直线都画在单元格之间的"缝隙"上。以 5×5 表格为例：
+
+- 顶部框线 = 水平线，`LineIndex = 0`（第 0 行上方），`From = 0`、`To = 4`（横跨第 0~4 列）
+- 左框线 = 垂直线，`LineIndex = 0`（第 0 列左侧），`From = 0`、`To = 4`（纵跨第 0~4 行）
+- 表格底部框线 = 水平线，`LineIndex = 5`（第 5 行上方，即第 4 行下方）
+
+### 单元格背景
+
+为单元格区域设置填充色（绘制在网格线之下，适合做表头/标题底色）：
+
+```csharp
+// 方式一：设置背景列表
+spreadsheet.CellBackgrounds = new List<CellBackground>
+{
+    new CellBackground(new SelectionRange(0, 0, 4, 0), new SolidColorBrush(Color.Parse("#4472C4"))),
+    new CellBackground(new SelectionRange(0, 1, 3, 1), new SolidColorBrush(Color.Parse("#D9E2F3"))),
+};
+
+// 方式二：逐个添加 / 清除
+spreadsheet.AddCellBackground(range, brush);
+spreadsheet.ClearCellBackgrounds();
+```
+
+### 单元格级样式字典
+
+合并、边框、背景之外，还可以直接操作单元格级样式字典（修改后需要调用 `Refresh()` 重绘）：
+
+```csharp
+spreadsheet.CellFontSize[(0, 0)] = 18;                                                  // 字号
+spreadsheet.CellTypefaces[(0, 0)] = new Typeface(FontFamily.Default, FontStyle.Normal, FontWeight.Bold);
+spreadsheet.CellForeground[(0, 0)] = new SolidColorBrush(Colors.White);                  // 文字颜色
+spreadsheet.CellTextAlignment[(0, 0)] = TextAlignment.Center;                            // 水平对齐
+spreadsheet.CellVerticalAlignment[(0, 0)] = VerticalAlignment.Center;                    // 垂直对齐
+spreadsheet.CellMargin[(0, 0)] = new Thickness(3);                                       // 内边距
+
+spreadsheet.Refresh();   // 强制重绘（修改字典后调用）
+```
+
+---
+
 ## 剪贴板操作
 
 ### 复制
@@ -415,6 +537,29 @@ spreadsheet.Load(serializedData, serializedFormat);
 ```
 
 此方法首先清除所有现有数据，然后加载指定的数据和格式。数据和格式必须使用相同的分隔符序列化生成。
+
+### 加载 RGF 报表
+
+Spreadalonia 支持加载 RGF（Report Generator Format）XML 文档，一次性恢复**数据、列宽/行高、合并区域、单元格背景、边框、字体样式、对齐方式**等全部信息：
+
+```csharp
+using (FileStream fs = File.OpenRead("report.rgf"))
+{
+    spreadsheet.LoadRgf(fs);
+}
+```
+
+也可以先用 `RgfParser` 解析为 `RgfData` 对象再自行处理：
+
+```csharp
+using (FileStream fs = File.OpenRead("report.rgf"))
+{
+    RgfData data = RgfParser.Load(fs);
+    // data.Data / data.MergedRanges / data.CellBorders / data.CellBackgrounds ...
+}
+```
+
+RGF 文档示例（XML）可参考 `Demo/MainWindow.axaml.cs` 中的 `LoadRgfDemo()`。
 
 ### 文本分割工具方法
 
@@ -563,6 +708,15 @@ spreadsheet.ColorDoubleTapped += (sender, e) =>
 | `MaxTableWidth`            | `int`                           | `int.MaxValue-2` | 读写  |
 | `MaxTableHeight`           | `int`                           | `int.MaxValue-2` | 读写  |
 | `ShowColorPreview`         | `bool`                          | `true`           | 读写  |
+| `MergedRanges`             | `IReadOnlyList<SelectionRange>` | 空                | 读写  |
+| `CellBorders`              | `List<CellBorder>`              | 空                | 读写  |
+| `CellBackgrounds`          | `List<CellBackground>`          | 空                | 读写  |
+| `CellFontSize`             | `Dictionary<(int,int), double>` | 空                | 读写  |
+| `CellTypefaces`            | `Dictionary<(int,int), Typeface>` | 空              | 读写  |
+| `CellForeground`           | `Dictionary<(int,int), IBrush>` | 空                | 读写  |
+| `CellTextAlignment`        | `Dictionary<(int,int), TextAlignment>` | 空          | 读写  |
+| `CellVerticalAlignment`    | `Dictionary<(int,int), VerticalAlignment>` | 空      | 读写  |
+| `CellMargin`               | `Dictionary<(int,int), Thickness>` | 空             | 读写  |
 
 ### 方法
 
@@ -601,6 +755,14 @@ spreadsheet.ColorDoubleTapped += (sender, e) =>
 | `Load(data, format)`                          | `void`                               | 加载序列化的数据和格式    |
 | `ScrollTopLeft()`                             | `void`                               | 滚动到左上角         |
 | `RecalculateAll()`                            | `void`                               | 强制重新计算所有公式     |
+| `MergeCells(range)`                           | `void`                               | 合并指定区域单元格       |
+| `UnmergeCells(range)`                         | `void`                               | 取消指定区域合并        |
+| `AddCellBorder(border)`                       | `void`                               | 添加一条边框线段        |
+| `ClearCellBorders()`                          | `void`                               | 清除所有边框线段        |
+| `AddCellBackground(range, brush)`             | `void`                               | 为区域添加背景色        |
+| `ClearCellBackgrounds()`                      | `void`                               | 清除所有背景色         |
+| `Refresh()`                                   | `void`                               | 修改样式字典后强制重绘     |
+| `LoadRgf(stream)`                             | `void`                               | 加载 RGF 报表文档      |
 | `SplitData(text, ...)`                        | `static string[][]`                  | 静态方法，分割文本为二维数组 |
 
 ### 事件
