@@ -540,10 +540,16 @@ spreadsheet.Load(serializedData, serializedFormat);
 
 ### 加载 RGF 报表
 
-Spreadalonia 支持加载 RGF（Report Generator Format）XML 文档，一次性恢复**数据、列宽/行高、合并区域、单元格背景、边框、字体样式、对齐方式**等全部信息：
+Spreadalonia 支持加载 RGF（Report Generator Format）文档，一次性恢复**数据、列宽/行高、合并区域、单元格背景、边框、字体样式、对齐方式**等全部信息。
+
+`RgfParser` 会自动识别以下两种格式（无需手动转换）：
+
+1. **ReoGrid v3 原生格式**（根节点 `<grid>`，含 `<head>`/`<rows>`/`<cols>`/`<v-borders>`/`<h-borders>`/`<cells>`）——即 ReoGrid 通过 `grid.Save(stream, FileFormat.ReoGridFormat)` 或 `grid.Load(stream, FileFormat.ReoGridFormat)` 使用的格式，支持**明文 XML 与 GZip 压缩**两种形态，可直接加载 ReoGrid 导出的 `.rgf` 模板文件（如金蝶报表模板、自行用 ReoGrid 设计的模板）。
+2. **旧版 Spreadalonia `<rgf>` XML 格式**——向后兼容保留。
 
 ```csharp
-using (FileStream fs = File.OpenRead("report.rgf"))
+// 直接加载 ReoGrid v3 导出的 .rgf 文件（明文或 GZip 压缩均可）
+using (FileStream fs = File.OpenRead("GL.rgf"))
 {
     spreadsheet.LoadRgf(fs);
 }
@@ -552,14 +558,16 @@ using (FileStream fs = File.OpenRead("report.rgf"))
 也可以先用 `RgfParser` 解析为 `RgfData` 对象再自行处理：
 
 ```csharp
-using (FileStream fs = File.OpenRead("report.rgf"))
+using (FileStream fs = File.OpenRead("GL.rgf"))
 {
     RgfData data = RgfParser.Load(fs);
     // data.Data / data.MergedRanges / data.CellBorders / data.CellBackgrounds ...
 }
 ```
 
-RGF 文档示例（XML）可参考 `Demo/MainWindow.axaml.cs` 中的 `LoadRgfDemo()`。
+> 提示：ReoGrid 的 `v-border`/`h-border` 元素中的 `pos` 属性（`left`/`right`/`top`/`bottom`/`all`）会按表格边界自动换算为 Spreadalonia 的 `CellBorder` 分隔线索引；行/列/单元格的背景色（`bgcolor`）、字体、字号、对齐等样式会按「全局 → 行 → 列 → 单元格」的优先级继承。
+
+旧版 `<rgf>` 格式的文档示例（XML）可参考 `Demo/MainWindow.axaml.cs` 中的 `LoadRgfDemo()`。
 
 ### 文本分割工具方法
 

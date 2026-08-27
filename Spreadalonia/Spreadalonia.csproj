@@ -9,7 +9,7 @@
 	<GenerateDocumentationFile>true</GenerateDocumentationFile>
 	<Company>University of Bristol</Company>
 	<Description>A simple spreadsheet control for Avalonia, with an integrated formula engine and custom function support.</Description>
-	<Version>1.1.1</Version>
+	<Version>1.1.2</Version>
 	<PackageId>Spreadalonia.Carfield2003</PackageId>
 	<PackageLicenseExpression>LGPL-3.0-only</PackageLicenseExpression>
 	<PackageProjectUrl>https://github.com/carfield2003/Spreadalonia</PackageProjectUrl>

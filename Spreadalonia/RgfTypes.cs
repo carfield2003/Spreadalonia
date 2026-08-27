@@ -249,10 +249,11 @@ namespace Spreadalonia
     {
         public string FontFamily;
         public double FontSize;
-        public FontStyle FontStyle;
-        public FontWeight FontWeight;
+        public FontStyle? FontStyle;
+        public FontWeight? FontWeight;
         public TextAlignment? Horizontal;
         public VerticalAlignment? Vertical;
         public IBrush Foreground;
+        public IBrush Background;
     }
 }
