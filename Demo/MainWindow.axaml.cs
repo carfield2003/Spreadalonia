@@ -38,10 +38,12 @@ namespace Demo
 
         private void LoadDemoData()
         {
-            // Clear all formatting features
+            // Clear all formatting features and reset the table bounds
             SpreadsheetControl.MergedRanges = null;
             SpreadsheetControl.CellBackgrounds = null;
             SpreadsheetControl.CellBorders = null;
+            SpreadsheetControl.MaxTableWidth = int.MaxValue - 2;
+            SpreadsheetControl.MaxTableHeight = int.MaxValue - 2;
             SpreadsheetControl.CellFontSize?.Clear();
             SpreadsheetControl.CellTypefaces?.Clear();
             SpreadsheetControl.CellForeground?.Clear();
@@ -117,10 +119,12 @@ namespace Demo
 
         private void LoadFeatureDemo()
         {
-            // Clear formatting features, then build a formatted report using the new API
+            // Clear formatting features, reset table bounds, then build a formatted report using the new API
             SpreadsheetControl.MergedRanges = null;
             SpreadsheetControl.CellBackgrounds = null;
             SpreadsheetControl.CellBorders = null;
+            SpreadsheetControl.MaxTableWidth = int.MaxValue - 2;
+            SpreadsheetControl.MaxTableHeight = int.MaxValue - 2;
             SpreadsheetControl.CellFontSize?.Clear();
             SpreadsheetControl.CellTypefaces?.Clear();
             SpreadsheetControl.CellForeground?.Clear();

@@ -371,13 +371,16 @@ namespace Spreadalonia
             double startWidth = currWidth;
 
             int rightIndex = leftIndex;
-            while (currWidth < x + width)
+            while (currWidth < x + width && rightIndex < MaxTableWidth)
             {
                 currWidth += GetWidth(rightIndex);
                 rightIndex++;
             }
 
-            return (leftIndex, leftDelta, rightIndex - leftIndex + 1, currWidth - startWidth, startWidth);
+            // The rendering loops iterate x = 0..width (inclusive), so width is the
+            // index of the last visible column. rightIndex is one past the last column
+            // whose width has been accumulated.
+            return (leftIndex, leftDelta, Math.Max(0, rightIndex - leftIndex - 1), currWidth - startWidth, startWidth);
         }
 
         public (int top, double topDelta, int height, double actualHeight, double startHeight) GetRangeY(double y, double height)
@@ -398,13 +401,16 @@ namespace Spreadalonia
             double startHeight = currHeight;
 
             int bottomIndex = topIndex;
-            while (currHeight < y + height)
+            while (currHeight < y + height && bottomIndex < MaxTableHeight)
             {
                 currHeight += GetHeight(bottomIndex);
                 bottomIndex++;
             }
 
-            return (topIndex, topDelta, bottomIndex - topIndex + 1, currHeight - startHeight, startHeight);
+            // The rendering loops iterate y = 0..height (inclusive), so height is the
+            // index of the last visible row. bottomIndex is one past the last row
+            // whose height has been accumulated.
+            return (topIndex, topDelta, Math.Max(0, bottomIndex - topIndex - 1), currHeight - startHeight, startHeight);
         }
 
         public (int left, double leftDelta, int top, double topDelta, int width, double actualWidth, double startWidth, int height, double actualHeight, double startHeight) GetRange(double x, double y, double width, double height)
@@ -1404,10 +1410,10 @@ namespace Spreadalonia
                             {
                                 int lineIndex = left + x - 1;
 
-                                foreach ((int segmentStart, int segmentEnd) in GetVisibleLineSegments(top, top + height - 1, lineIndex, false))
+                                foreach ((int segmentStart, int segmentEnd) in GetVisibleLineSegments(top, top + height, lineIndex, false))
                                 {
                                     double lineY0 = segmentStart == top ? 0 : ys[segmentStart - top - 1];
-                                    double lineY1 = segmentEnd == top + height - 1 ? ys[height] : ys[segmentEnd - top];
+                                    double lineY1 = segmentEnd == top + height ? ys[height] : ys[segmentEnd - top];
 
                                     context.DrawLine(gridPen, new Point(xs[x], lineY0).SnapToDevicePixels(this), new Point(xs[x], lineY1).SnapToDevicePixels(this));
                                 }
@@ -1421,10 +1427,10 @@ namespace Spreadalonia
                             {
                                 int lineIndex = top + y - 1;
 
-                                foreach ((int segmentStart, int segmentEnd) in GetVisibleLineSegments(left, left + width - 1, lineIndex, true))
+                                foreach ((int segmentStart, int segmentEnd) in GetVisibleLineSegments(left, left + width, lineIndex, true))
                                 {
                                     double lineX0 = segmentStart == left ? 0 : xs[segmentStart - left - 1];
-                                    double lineX1 = segmentEnd == left + width - 1 ? xs[width] : xs[segmentEnd - left];
+                                    double lineX1 = segmentEnd == left + width ? xs[width] : xs[segmentEnd - left];
 
                                     context.DrawLine(gridPen, new Point(lineX0, ys[y]).SnapToDevicePixels(this), new Point(lineX1, ys[y]).SnapToDevicePixels(this));
                                 }
@@ -1442,7 +1448,7 @@ namespace Spreadalonia
                                     continue;
                                 }
 
-                                SelectionRange visibleBackground = cellBackground.Range.Intersection(new SelectionRange(left, top, left + width - 1, top + height - 1));
+                                SelectionRange visibleBackground = cellBackground.Range.Intersection(new SelectionRange(left, top, left + width, top + height));
 
                                 if (visibleBackground.Width > 0 && visibleBackground.Height > 0)
                                 {
@@ -1613,8 +1619,8 @@ namespace Spreadalonia
                             foreach (SelectionRange mergedRange in MergedRanges)
                             {
                                 // Only skip merges that are entirely outside the visible range
-                                if (mergedRange.Right < left || mergedRange.Left > left + width - 1 ||
-                                    mergedRange.Bottom < top || mergedRange.Top > top + height - 1)
+                                if (mergedRange.Right < left || mergedRange.Left > left + width ||
+                                    mergedRange.Bottom < top || mergedRange.Top > top + height)
                                 {
                                     continue;
                                 }
@@ -1674,7 +1680,7 @@ namespace Spreadalonia
                                 }
 
                                 // Clip the merged range to the visible area so partial merges still render
-                                SelectionRange visibleMerge = mergedRange.Intersection(new SelectionRange(left, top, left + width - 1, top + height - 1));
+                                SelectionRange visibleMerge = mergedRange.Intersection(new SelectionRange(left, top, left + width, top + height));
 
                                 double mergedX0 = visibleMerge.Left == left ? 0 : xs[visibleMerge.Left - left - 1];
                                 double mergedY0 = visibleMerge.Top == top ? 0 : ys[visibleMerge.Top - top - 1];
@@ -1736,7 +1742,7 @@ namespace Spreadalonia
 
                                 if (border.IsHorizontal)
                                 {
-                                    if (border.LineIndex < top || border.LineIndex > top + height)
+                                    if (border.LineIndex < top || border.LineIndex > top + height + 1)
                                     {
                                         continue;
                                     }
@@ -1746,7 +1752,7 @@ namespace Spreadalonia
                                     {
                                         borderY = 0;
                                     }
-                                    else if (border.LineIndex == top + height)
+                                    else if (border.LineIndex >= top + height + 1)
                                     {
                                         borderY = ys[height];
                                     }
@@ -1756,7 +1762,7 @@ namespace Spreadalonia
                                     }
 
                                     int borderColumnStart = Math.Max(border.From, left);
-                                    int borderColumnEnd = Math.Min(border.To, left + width - 1);
+                                    int borderColumnEnd = Math.Min(border.To, left + width);
 
                                     if (borderColumnStart > borderColumnEnd)
                                     {
@@ -1767,14 +1773,14 @@ namespace Spreadalonia
                                     foreach ((int segmentStart, int segmentEnd) in GetVisibleLineSegments(borderColumnStart, borderColumnEnd, border.LineIndex, true))
                                     {
                                         double borderX0 = segmentStart == left ? 0 : xs[segmentStart - left - 1];
-                                        double borderX1 = segmentEnd == left + width - 1 ? xs[width] : xs[segmentEnd - left];
+                                        double borderX1 = segmentEnd == left + width ? xs[width] : xs[segmentEnd - left];
 
                                         context.DrawLine(borderPen, new Point(borderX0, borderY).SnapToDevicePixels(this), new Point(borderX1, borderY).SnapToDevicePixels(this));
                                     }
                                 }
                                 else
                                 {
-                                    if (border.LineIndex < left || border.LineIndex > left + width)
+                                    if (border.LineIndex < left || border.LineIndex > left + width + 1)
                                     {
                                         continue;
                                     }
@@ -1784,7 +1790,7 @@ namespace Spreadalonia
                                     {
                                         borderX = 0;
                                     }
-                                    else if (border.LineIndex == left + width)
+                                    else if (border.LineIndex >= left + width + 1)
                                     {
                                         borderX = xs[width];
                                     }
@@ -1794,7 +1800,7 @@ namespace Spreadalonia
                                     }
 
                                     int borderRowStart = Math.Max(border.From, top);
-                                    int borderRowEnd = Math.Min(border.To, top + height - 1);
+                                    int borderRowEnd = Math.Min(border.To, top + height);
 
                                     if (borderRowStart > borderRowEnd)
                                     {
@@ -1805,7 +1811,7 @@ namespace Spreadalonia
                                     foreach ((int segmentStart, int segmentEnd) in GetVisibleLineSegments(borderRowStart, borderRowEnd, border.LineIndex, false))
                                     {
                                         double borderY0 = segmentStart == top ? 0 : ys[segmentStart - top - 1];
-                                        double borderY1 = segmentEnd == top + height - 1 ? ys[height] : ys[segmentEnd - top];
+                                        double borderY1 = segmentEnd == top + height ? ys[height] : ys[segmentEnd - top];
 
                                         context.DrawLine(borderPen, new Point(borderX, borderY0).SnapToDevicePixels(this), new Point(borderX, borderY1).SnapToDevicePixels(this));
                                     }

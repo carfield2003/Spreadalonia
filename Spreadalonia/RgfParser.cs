@@ -439,13 +439,20 @@ namespace Spreadalonia
                     int fromRow = row;
                     int toRow = row + rows - 1;
 
-                    if (pos == "all" || pos == "both" || pos == "left" || pos == "middle")
+                    if (pos == "left")
                     {
+                        // Left edge of column `col`
                         data.CellBorders.Add(new CellBorder(false, col, fromRow, toRow, brush, thickness));
                     }
-                    if (pos == "all" || pos == "both" || pos == "right" || pos == "middle")
+                    else if (pos == "right")
                     {
+                        // Right edge of column `col` (when col == width this becomes the table right edge)
                         data.CellBorders.Add(new CellBorder(false, Math.Min(col + 1, Math.Max(0, width)), fromRow, toRow, brush, thickness));
+                    }
+                    else
+                    {
+                        // "all", "both", "middle" or any other value: draw the single separator at column `col`
+                        data.CellBorders.Add(new CellBorder(false, col, fromRow, toRow, brush, thickness));
                     }
                 }
             }
@@ -473,13 +480,20 @@ namespace Spreadalonia
                     int fromCol = col;
                     int toCol = col + cols - 1;
 
-                    if (pos == "all" || pos == "both" || pos == "top" || pos == "middle")
+                    if (pos == "top")
                     {
+                        // Top edge of row `row`
                         data.CellBorders.Add(new CellBorder(true, row, fromCol, toCol, brush, thickness));
                     }
-                    if (pos == "all" || pos == "both" || pos == "bottom" || pos == "middle")
+                    else if (pos == "bottom")
                     {
+                        // Bottom edge of row `row` (when row == height this becomes the table bottom edge)
                         data.CellBorders.Add(new CellBorder(true, Math.Min(row + 1, Math.Max(0, height)), fromCol, toCol, brush, thickness));
+                    }
+                    else
+                    {
+                        // "all", "both", "middle" or any other value: draw the single separator at row `row`
+                        data.CellBorders.Add(new CellBorder(true, row, fromCol, toCol, brush, thickness));
                     }
                 }
             }
@@ -506,15 +520,17 @@ namespace Spreadalonia
                         data.Data[(col, row)] = text;
                     }
 
-                    // Style inheritance: global -> row -> column -> cell
+                    // Style inheritance: global -> column -> row -> cell
+                    // (ReoGrid resolves conflicts at the same level by giving the row style
+                    // precedence over the column style; a cell style has the highest precedence.)
                     RgfStyle style = globalStyle;
-                    if (rowStyles.TryGetValue(row, out RgfStyle rowStyle))
-                    {
-                        style = MergeStyles(style, rowStyle);
-                    }
                     if (colStyles.TryGetValue(col, out RgfStyle colStyle))
                     {
                         style = MergeStyles(style, colStyle);
+                    }
+                    if (rowStyles.TryGetValue(row, out RgfStyle rowStyle))
+                    {
+                        style = MergeStyles(style, rowStyle);
                     }
                     RgfStyle cellStyle = ParseReoGridStyle(cellElement, null);
                     cellStyle = ParseReoGridStyle(GetChild(cellElement, "style"), cellStyle);
@@ -553,12 +569,15 @@ namespace Spreadalonia
                 return;
             }
 
-            if (!string.IsNullOrEmpty(style.FontFamily))
+            // Create a custom typeface whenever the font family, weight or style is
+            // customised. A row/column/cell style may set only bold="true" without a
+            // font family; in that case the default family is used with the custom weight.
+            if (!string.IsNullOrEmpty(style.FontFamily) || style.FontStyle.HasValue || style.FontWeight.HasValue)
             {
                 FontFamily family;
                 try
                 {
-                    family = new FontFamily(style.FontFamily);
+                    family = !string.IsNullOrEmpty(style.FontFamily) ? new FontFamily(style.FontFamily) : FontFamily.Default;
                 }
                 catch
                 {
@@ -702,7 +721,9 @@ namespace Spreadalonia
             double fontSize = GetDouble(element, "font-size", 0);
             if (fontSize > 0)
             {
-                style.FontSize = fontSize;
+                // ReoGrid stores font sizes in points (pt); Avalonia measures font sizes
+                // in DIPs (1/96 inch). 1 pt = 96/72 DIP, so scale to keep the same visual size.
+                style.FontSize = fontSize * 96.0 / 72.0;
             }
 
             string bold = GetAttribute(element, "bold");

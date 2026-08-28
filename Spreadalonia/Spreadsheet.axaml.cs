@@ -439,6 +439,8 @@ namespace Spreadalonia
             ContentTable.Data = rgf.Data;
             ContentTable.ColumnWidths = rgf.ColumnWidths;
             ContentTable.RowHeights = rgf.RowHeights;
+            this.MaxTableWidth = Math.Max(0, rgf.Width);
+            this.MaxTableHeight = Math.Max(0, rgf.Height);
             ContentTable.MergedRanges = ImmutableList.CreateRange(rgf.MergedRanges ?? new List<SelectionRange>());
             ContentTable.CellBackgrounds = rgf.CellBackgrounds;
             ContentTable.CellBorders = rgf.CellBorders;
@@ -448,6 +450,11 @@ namespace Spreadalonia
             ContentTable.CellTextAlignment = rgf.CellTextAlignment;
             ContentTable.CellVerticalAlignment = rgf.CellVerticalAlignment;
             ContentTable.CellMargin = rgf.CellMargin;
+
+            // RGF loading replaces all cell data; clear any cached formula results
+            // and engine state from previously loaded documents or demo data.
+            ContentTable.FormulaCells?.Clear();
+            this.FormulaEngine?.Clear();
 
             ContentTable.InvalidateVisual();
             InvalidateVisual();
