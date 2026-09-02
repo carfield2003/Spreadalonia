@@ -11,6 +11,8 @@
 			<Button x:Name="BasicDemoButton" Content="Basic Demo" Click="BasicDemoButton_Click"/>
 			<Button x:Name="FeaturesButton" Content="Merge / Border / Background / Style" Click="FeaturesButton_Click"/>
 			<Button x:Name="RgfButton" Content="LoadRgf Demo" Click="RgfButton_Click"/>
+			<Button x:Name="LoadTwoRgfButton" Content="Load Two RGFs (bug repro)" Click="LoadTwoRgfButton_Click"/>
+			<Button x:Name="TitleCellButton" Content="TitleCell Demo" Click="TitleCellButton_Click"/>
 		</StackPanel>
 		<local:Spreadsheet x:Name="SpreadsheetControl">
 		</local:Spreadsheet>

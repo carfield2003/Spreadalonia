@@ -164,6 +164,13 @@ namespace Spreadalonia
         /// </summary>
         public Dictionary<(int, int), double> CellFontSize { get; internal set; } = new Dictionary<(int, int), double>();
 
+        /// <summary>
+        /// The custom title cells, indexed by (column, row). When a cell has a title cell, the
+        /// title cell is rendered instead of the regular text content. This is used for report
+        /// captions that contain multiple formatted text chunks (e.g. a title and subtitle).
+        /// </summary>
+        public Dictionary<(int, int), TitleCell> TitleCells { get; internal set; } = new Dictionary<(int, int), TitleCell>();
+
         private List<CellBackground> _cellBackgrounds = new List<CellBackground>();
 
         /// <summary>
@@ -306,6 +313,7 @@ namespace Spreadalonia
             CellTextAlignment = new Dictionary<(int, int), TextAlignment>();
             CellVerticalAlignment = new Dictionary<(int, int), VerticalAlignment>();
             CellMargin = new Dictionary<(int, int), Thickness>();
+            TitleCells = new Dictionary<(int, int), TitleCell>();
 
             this.Transitions = CachedTransitions;
         }
@@ -1497,6 +1505,15 @@ namespace Spreadalonia
 
                                     if (!Container.IsEditing || left + x != Container.EditingCell.Item1 || top + y != Container.EditingCell.Item2)
                                     {
+                                        // Title cells render their own content and override the default text drawing.
+                                        if (TitleCells.TryGetValue((left + x, top + y), out TitleCell titleCell))
+                                        {
+                                            double titleX = x == 0 ? 0 : xs[x - 1];
+                                            double titleY = y == 0 ? 0 : ys[y - 1];
+                                            titleCell.Render(context, new Rect(titleX, titleY, xs[x] - titleX, ys[y] - titleY), null, null);
+                                            continue;
+                                        }
+
                                         // Determine display text: use formula result if available, otherwise raw text
                                         string displayText = txt;
                                         if (FormulaCells != null && FormulaCells.TryGetValue((left + x, top + y), out CellData formulaCell))
@@ -1625,13 +1642,29 @@ namespace Spreadalonia
                                     continue;
                                 }
 
-                                if (!Data.TryGetValue((mergedRange.Left, mergedRange.Top), out string mergedText))
+                                bool hasMergedData = Data.TryGetValue((mergedRange.Left, mergedRange.Top), out string mergedText);
+                                bool hasMergedTitleCell = TitleCells.TryGetValue((mergedRange.Left, mergedRange.Top), out TitleCell mergedTitleCell);
+                                if (!hasMergedData && !hasMergedTitleCell)
                                 {
                                     continue;
                                 }
 
                                 if (Container.IsEditing && Container.EditingCell.Item1 == mergedRange.Left && Container.EditingCell.Item2 == mergedRange.Top)
                                 {
+                                    continue;
+                                }
+
+                                // Title cells render their own content over the whole merged range.
+                                if (hasMergedTitleCell)
+                                {
+                                    SelectionRange titleVisibleMerge = mergedRange.Intersection(new SelectionRange(left, top, left + width, top + height));
+
+                                    double titleMergeX0 = titleVisibleMerge.Left == left ? 0 : xs[titleVisibleMerge.Left - left - 1];
+                                    double titleMergeY0 = titleVisibleMerge.Top == top ? 0 : ys[titleVisibleMerge.Top - top - 1];
+                                    double titleMergeX1 = titleVisibleMerge.Right - left < width ? xs[titleVisibleMerge.Right - left] : xs[width];
+                                    double titleMergeY1 = titleVisibleMerge.Bottom - top < height ? ys[titleVisibleMerge.Bottom - top] : ys[height];
+
+                                    mergedTitleCell.Render(context, new Rect(titleMergeX0, titleMergeY0, titleMergeX1 - titleMergeX0, titleMergeY1 - titleMergeY0), null, null);
                                     continue;
                                 }
 

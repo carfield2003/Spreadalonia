@@ -7,6 +7,7 @@ using Spreadalonia;
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text;
 
 namespace Demo
@@ -19,6 +20,67 @@ namespace Demo
 
             // Load some demo data with formulas
             LoadDemoData();
+
+            // Automated screenshot test for the TitleCell demo.
+            if (Environment.GetCommandLineArgs().Any(a => a == "--title-cell-test"))
+            {
+                Opened += async (_, _) =>
+                {
+                    try
+                    {
+                        await System.Threading.Tasks.Task.Delay(500);
+                        TitleCellButton_Click(null!, null!);
+                        await System.Threading.Tasks.Task.Delay(800);
+                        SaveScreenshot(@"C:\Users\89664\Desktop\title_cell_test.png");
+                        Console.WriteLine("[Test] TitleCell screenshot saved.");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine("[Test] EXCEPTION: " + ex);
+                    }
+                    finally
+                    {
+                        Environment.Exit(0);
+                    }
+                };
+            }
+
+            // Automated repro for the "second LoadRgf keeps showing the first file" bug.
+            if (Environment.GetCommandLineArgs().Any(a => a == "--load-two-rgf"))
+            {
+                Opened += async (_, _) =>
+                {
+                    try
+                    {
+                        await System.Threading.Tasks.Task.Delay(500);
+                        LoadRgfFile(@"C:\Users\89664\Desktop\GL.rgf");
+                        await System.Threading.Tasks.Task.Delay(500);
+                        SaveScreenshot(@"C:\Users\89664\Desktop\rgf_test_1_GL.png");
+                        LoadRgfFile(@"C:\Users\89664\Desktop\GLQ.rgf");
+                        await System.Threading.Tasks.Task.Delay(500);
+                        SaveScreenshot(@"C:\Users\89664\Desktop\rgf_test_2_GLQ.png");
+                        Console.WriteLine("[Test] Screenshots saved.");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine("[Test] EXCEPTION: " + ex);
+                    }
+                    finally
+                    {
+                        Environment.Exit(0);
+                    }
+                };
+            }
+        }
+
+        private void SaveScreenshot(string path)
+        {
+            var bitmap = new Avalonia.Media.Imaging.RenderTargetBitmap(
+                new PixelSize((int)this.Bounds.Width, (int)this.Bounds.Height),
+                new Vector(96, 96));
+            bitmap.Render(this);
+            bitmap.Save(path);
+            Console.WriteLine("[Test] Saved screenshot: " + path);
         }
 
         private void BasicDemoButton_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
@@ -34,6 +96,41 @@ namespace Demo
         private void RgfButton_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
         {
             LoadRgfDemo();
+        }
+
+        // Test hook: load two different RGF files in succession and log diagnostics.
+        // Reproduces the reported bug where the second LoadRgf call keeps showing the first file.
+        private void LoadTwoRgfButton_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+        {
+            try
+            {
+                LoadRgfFile(@"C:\Users\89664\Desktop\GL.rgf");
+                LoadRgfFile(@"C:\Users\89664\Desktop\GLQ.rgf");
+                Console.WriteLine("[Test] Done. The spreadsheet should now show GLQ.rgf (10 columns).");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("[Test] EXCEPTION: " + ex);
+            }
+        }
+
+        private void LoadRgfFile(string path)
+        {
+            Console.WriteLine("[Test] Loading " + path + " ...");
+            using (FileStream stream = File.OpenRead(path))
+            {
+                SpreadsheetControl.LoadRgf(stream);
+            }
+            var data = SpreadsheetControl.Data;
+            Console.WriteLine("[Test] Loaded. Cells=" + (data?.Count ?? -1)
+                + ", MaxTableWidth=" + SpreadsheetControl.MaxTableWidth
+                + ", MaxTableHeight=" + SpreadsheetControl.MaxTableHeight);
+            int i = 0;
+            foreach (var kv in data ?? new Dictionary<(int, int), string>())
+            {
+                if (i++ >= 6) break;
+                Console.WriteLine("[Test]   (" + kv.Key.Item1 + "," + kv.Key.Item2 + ") = " + kv.Value);
+            }
         }
 
         private void LoadDemoData()
@@ -238,6 +335,161 @@ namespace Demo
             SpreadsheetControl.CellVerticalAlignment[(4, 3)] = VerticalAlignment.Center;
 
             // Redraw with the new style dictionaries applied
+            SpreadsheetControl.Refresh();
+        }
+
+        private void TitleCellButton_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+        {
+            // Clear formatting features and reset the table bounds
+            SpreadsheetControl.MergedRanges = null;
+            SpreadsheetControl.CellBackgrounds = null;
+            SpreadsheetControl.CellBorders = null;
+            SpreadsheetControl.MaxTableWidth = int.MaxValue - 2;
+            SpreadsheetControl.MaxTableHeight = int.MaxValue - 2;
+            SpreadsheetControl.CellFontSize?.Clear();
+            SpreadsheetControl.CellTypefaces?.Clear();
+            SpreadsheetControl.CellForeground?.Clear();
+            SpreadsheetControl.CellTextAlignment?.Clear();
+            SpreadsheetControl.CellVerticalAlignment?.Clear();
+            SpreadsheetControl.CellMargin?.Clear();
+            SpreadsheetControl.TitleCells?.Clear();
+
+            // Replace existing data completely so previous demos do not leave rows behind.
+            SpreadsheetControl.Data?.Clear();
+
+            var data = new Dictionary<(int, int), string>
+            {
+                [(0, 0)] = "", // title cell body is rendered by TitleCell
+
+                [(0, 1)] = "期间",
+                [(1, 1)] = "凭证字号",
+                [(2, 1)] = "摘要",
+                [(3, 1)] = "借方",
+                [(4, 1)] = "贷方",
+                [(5, 1)] = "方向",
+                [(6, 1)] = "余额",
+
+                [(0, 2)] = "2024.01",
+                [(1, 2)] = "",
+                [(2, 2)] = "本月合计",
+                [(3, 2)] = "8,412.00",
+                [(4, 2)] = "15,392.00",
+                [(5, 2)] = "贷",
+                [(6, 2)] = "6,980.00",
+
+                [(0, 3)] = "2024.01",
+                [(1, 3)] = "",
+                [(2, 3)] = "当前累计",
+                [(3, 3)] = "8,412.00",
+                [(4, 3)] = "15,392.00",
+                [(5, 3)] = "贷",
+                [(6, 3)] = "6,980.00",
+            };
+
+            SpreadsheetControl.SetData(data);
+
+            // Row heights: title row is taller to hold two lines of text
+            SpreadsheetControl.SetHeight(new Dictionary<int, double>
+            {
+                [0] = 70,
+                [1] = 28,
+                [2] = 26,
+                [3] = 26,
+            });
+
+            // Column widths
+            var columnWidths = new Dictionary<int, double>();
+            for (int c = 0; c <= 6; c++)
+            {
+                columnWidths[c] = c == 2 ? 150 : 90;
+            }
+            SpreadsheetControl.SetWidth(columnWidths);
+
+            // Merge the title row across all 7 columns
+            SpreadsheetControl.MergedRanges = new List<SelectionRange>
+            {
+                new SelectionRange(0, 0, 6, 0)
+            };
+
+            // Title cell with two chunks: main title + subtitle
+            double titleOrgHeight = 70;
+            var titleCell = new TitleCell(new List<TitleCell.Chunk>
+            {
+                new TitleCell.Chunk
+                {
+                    Text = "总分类账",
+                    FontName = "微软雅黑",
+                    FontSize = 22,
+                    Color = Brushes.Black,
+                    HorAlign = TextAlignment.Center,
+                    VerAlign = VerticalAlignment.Bottom,
+                    Top = 0,
+                    Height = titleOrgHeight * 0.62
+                },
+                new TitleCell.Chunk
+                {
+                    Text = "2024.1-2024.1",
+                    FontName = "微软雅黑",
+                    FontSize = 11,
+                    Color = Brushes.Black,
+                    HorAlign = TextAlignment.Center,
+                    VerAlign = VerticalAlignment.Top,
+                    Top = titleOrgHeight * 0.62,
+                    Height = titleOrgHeight * 0.38
+                }
+            })
+            {
+                OrgHeight = titleOrgHeight
+            };
+
+            SpreadsheetControl.TitleCells[(0, 0)] = titleCell;
+
+            // White title background
+            SpreadsheetControl.CellBackgrounds = new List<CellBackground>
+            {
+                new CellBackground(new SelectionRange(0, 0, 6, 0), Brushes.White),
+                new CellBackground(new SelectionRange(0, 1, 6, 1), new SolidColorBrush(Color.Parse("#E7E6E6"))),
+                new CellBackground(new SelectionRange(0, 3, 6, 3), new SolidColorBrush(Color.Parse("#CCFFCC")))
+            };
+
+            // Outer frame + header separator + row separators
+            var black = new SolidColorBrush(Color.Parse("#000000"));
+            SpreadsheetControl.CellBorders = new List<CellBorder>
+            {
+                new CellBorder(true, 0, 0, 6, black, 1),
+                new CellBorder(true, 1, 0, 6, black, 1),
+                new CellBorder(true, 2, 0, 6, black, 1),
+                new CellBorder(true, 3, 0, 6, black, 1),
+                new CellBorder(true, 4, 0, 6, black, 1),
+
+                new CellBorder(false, 0, 1, 4, black, 1),
+                new CellBorder(false, 7, 1, 4, black, 1),
+                new CellBorder(false, 1, 1, 4, black, 1),
+                new CellBorder(false, 2, 1, 4, black, 1),
+                new CellBorder(false, 3, 1, 4, black, 1),
+                new CellBorder(false, 4, 1, 4, black, 1),
+                new CellBorder(false, 5, 1, 4, black, 1),
+                new CellBorder(false, 6, 1, 4, black, 1),
+            };
+
+            // Header style
+            for (int c = 0; c <= 6; c++)
+            {
+                SpreadsheetControl.CellTypefaces[(c, 1)] = new Typeface(FontFamily.Default, FontStyle.Normal, FontWeight.Bold);
+                SpreadsheetControl.CellTextAlignment[(c, 1)] = TextAlignment.Center;
+                SpreadsheetControl.CellVerticalAlignment[(c, 1)] = VerticalAlignment.Center;
+            }
+
+            // Right-align amounts and centre direction
+            for (int r = 2; r <= 3; r++)
+            {
+                SpreadsheetControl.CellTextAlignment[(3, r)] = TextAlignment.Right;
+                SpreadsheetControl.CellTextAlignment[(4, r)] = TextAlignment.Right;
+                SpreadsheetControl.CellTextAlignment[(6, r)] = TextAlignment.Right;
+                SpreadsheetControl.CellTextAlignment[(5, r)] = TextAlignment.Center;
+                SpreadsheetControl.CellVerticalAlignment[(5, r)] = VerticalAlignment.Center;
+            }
+
             SpreadsheetControl.Refresh();
         }
 

@@ -345,6 +345,12 @@ namespace Spreadalonia
         public Dictionary<(int, int), Thickness> CellMargin => IsInitialized ? ContentTable.CellMargin : null;
 
         /// <summary>
+        /// The custom title cells, indexed by (column, row). When a cell has a title cell, the
+        /// title cell is rendered instead of the regular text content.
+        /// </summary>
+        public Dictionary<(int, int), TitleCell> TitleCells => IsInitialized ? ContentTable.TitleCells : null;
+
+        /// <summary>
         /// Adds a background to a range of cells.
         /// </summary>
         /// <param name="range">The range of cells the background is applied to.</param>
@@ -450,6 +456,7 @@ namespace Spreadalonia
             ContentTable.CellTextAlignment = rgf.CellTextAlignment;
             ContentTable.CellVerticalAlignment = rgf.CellVerticalAlignment;
             ContentTable.CellMargin = rgf.CellMargin;
+            ContentTable.TitleCells = rgf.TitleCells ?? new Dictionary<(int, int), TitleCell>();
 
             // RGF loading replaces all cell data; clear any cached formula results
             // and engine state from previously loaded documents or demo data.

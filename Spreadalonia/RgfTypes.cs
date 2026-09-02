@@ -240,6 +240,12 @@ namespace Spreadalonia
         /// The margin of each cell, indexed by (column, row).
         /// </summary>
         public Dictionary<(int, int), Thickness> CellMargin { get; internal set; } = new Dictionary<(int, int), Thickness>();
+
+        /// <summary>
+        /// The custom title cells, indexed by (column, row). When a cell has a title cell, the
+        /// title cell is rendered instead of the regular text content.
+        /// </summary>
+        public Dictionary<(int, int), TitleCell> TitleCells { get; internal set; } = new Dictionary<(int, int), TitleCell>();
     }
 
     /// <summary>
