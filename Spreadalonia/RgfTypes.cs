@@ -246,6 +246,12 @@ namespace Spreadalonia
         /// title cell is rendered instead of the regular text content.
         /// </summary>
         public Dictionary<(int, int), TitleCell> TitleCells { get; internal set; } = new Dictionary<(int, int), TitleCell>();
+
+        /// <summary>
+        /// The clickable link cells, indexed by (column, row). When a cell has a link cell, the
+        /// link text is rendered instead of the regular text content.
+        /// </summary>
+        public Dictionary<(int, int), LinkCell> LinkCells { get; internal set; } = new Dictionary<(int, int), LinkCell>();
     }
 
     /// <summary>

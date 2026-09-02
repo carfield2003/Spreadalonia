@@ -21,6 +21,12 @@ namespace Demo
             // Load some demo data with formulas
             LoadDemoData();
 
+            // Demonstrate the LinkClick event raised by LinkCell / NumericLinkCell.
+            SpreadsheetControl.LinkClick += (s, e) =>
+            {
+                Console.WriteLine($"[LinkClick] cell ({e.Left}, {e.Top}) -> {e.LinkPara}");
+            };
+
             // Automated screenshot test for the TitleCell demo.
             if (Environment.GetCommandLineArgs().Any(a => a == "--title-cell-test"))
             {
@@ -33,6 +39,30 @@ namespace Demo
                         await System.Threading.Tasks.Task.Delay(800);
                         SaveScreenshot(@"C:\Users\89664\Desktop\title_cell_test.png");
                         Console.WriteLine("[Test] TitleCell screenshot saved.");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine("[Test] EXCEPTION: " + ex);
+                    }
+                    finally
+                    {
+                        Environment.Exit(0);
+                    }
+                };
+            }
+
+            // Automated screenshot test for the LinkCell demo.
+            if (Environment.GetCommandLineArgs().Any(a => a == "--link-cell-test"))
+            {
+                Opened += async (_, _) =>
+                {
+                    try
+                    {
+                        await System.Threading.Tasks.Task.Delay(500);
+                        LinkCellButton_Click(null!, null!);
+                        await System.Threading.Tasks.Task.Delay(800);
+                        SaveScreenshot(@"C:\Users\89664\Desktop\link_cell_test.png");
+                        Console.WriteLine("[Test] LinkCell screenshot saved.");
                     }
                     catch (Exception ex)
                     {
@@ -489,6 +519,108 @@ namespace Demo
                 SpreadsheetControl.CellTextAlignment[(5, r)] = TextAlignment.Center;
                 SpreadsheetControl.CellVerticalAlignment[(5, r)] = VerticalAlignment.Center;
             }
+
+            SpreadsheetControl.Refresh();
+        }
+
+        private void LinkCellButton_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+        {
+            // Clear formatting features and reset the table bounds
+            SpreadsheetControl.MergedRanges = null;
+            SpreadsheetControl.CellBackgrounds = null;
+            SpreadsheetControl.CellBorders = null;
+            SpreadsheetControl.MaxTableWidth = int.MaxValue - 2;
+            SpreadsheetControl.MaxTableHeight = int.MaxValue - 2;
+            SpreadsheetControl.CellFontSize?.Clear();
+            SpreadsheetControl.CellTypefaces?.Clear();
+            SpreadsheetControl.CellForeground?.Clear();
+            SpreadsheetControl.CellTextAlignment?.Clear();
+            SpreadsheetControl.CellVerticalAlignment?.Clear();
+            SpreadsheetControl.CellMargin?.Clear();
+            SpreadsheetControl.TitleCells?.Clear();
+            SpreadsheetControl.LinkCells?.Clear();
+
+            // Replace existing data completely so previous demos do not leave rows behind.
+            SpreadsheetControl.Data?.Clear();
+
+            var data = new Dictionary<(int, int), string>
+            {
+                [(0, 0)] = "日期",
+                [(1, 0)] = "摘要",
+                [(2, 0)] = "借方",
+                [(3, 0)] = "贷方",
+
+                [(0, 1)] = "2024.01.05",
+                [(1, 1)] = "采购办公用品",
+                [(2, 1)] = "8412",
+                [(3, 1)] = "0",
+
+                [(0, 2)] = "2024.01.12",
+                [(1, 2)] = "销售货款",
+                [(2, 2)] = "0",
+                [(3, 2)] = "15392",
+
+                [(0, 3)] = "2024.01.31",
+                [(1, 3)] = "结转损益",
+                [(2, 3)] = "6980",
+                [(3, 3)] = "6980",
+
+                [(0, 4)] = "",
+                [(1, 4)] = "打开财务报表",
+            };
+
+            SpreadsheetControl.SetData(data);
+
+            // Column widths
+            var columnWidths = new Dictionary<int, double>
+            {
+                [0] = 90,
+                [1] = 160,
+                [2] = 90,
+                [3] = 90,
+            };
+            SpreadsheetControl.SetWidth(columnWidths);
+
+            // Row heights
+            SpreadsheetControl.SetHeight(new Dictionary<int, double>
+            {
+                [0] = 28,
+                [1] = 26,
+                [2] = 26,
+                [3] = 26,
+                [4] = 26,
+            });
+
+            // Header style
+            for (int c = 0; c <= 3; c++)
+            {
+                SpreadsheetControl.CellTypefaces[(c, 0)] = new Typeface(FontFamily.Default, FontStyle.Normal, FontWeight.Bold);
+                SpreadsheetControl.CellTextAlignment[(c, 0)] = TextAlignment.Center;
+                SpreadsheetControl.CellVerticalAlignment[(c, 0)] = VerticalAlignment.Center;
+            }
+
+            // Right-align amounts
+            for (int r = 1; r <= 3; r++)
+            {
+                SpreadsheetControl.CellTextAlignment[(2, r)] = TextAlignment.Right;
+                SpreadsheetControl.CellTextAlignment[(3, r)] = TextAlignment.Right;
+                SpreadsheetControl.CellVerticalAlignment[(2, r)] = VerticalAlignment.Center;
+                SpreadsheetControl.CellVerticalAlignment[(3, r)] = VerticalAlignment.Center;
+            }
+
+            // Numeric link cells: formatted, clickable amounts.
+            // Values of zero render as empty (or "…" when ResponseEmpty is set) but stay clickable.
+            SpreadsheetControl.LinkCells[(2, 1)] = new NumericLinkCell("https://example.com/debit/8412", false, false, 2);
+            SpreadsheetControl.LinkCells[(3, 1)] = new NumericLinkCell("https://example.com/credit/0", true, false, 2);
+            SpreadsheetControl.LinkCells[(2, 2)] = new NumericLinkCell("https://example.com/debit/0", true, false, 2);
+            SpreadsheetControl.LinkCells[(3, 2)] = new NumericLinkCell("https://example.com/credit/15392", false, false, 2);
+            SpreadsheetControl.LinkCells[(2, 3)] = new NumericLinkCell("https://example.com/debit/6980", false, false, 2);
+            SpreadsheetControl.LinkCells[(3, 3)] = new NumericLinkCell("https://example.com/credit/6980", false, false, 2);
+
+            // Plain link cell with strikethrough in the summary row.
+            SpreadsheetControl.LinkCells[(1, 4)] = new LinkCell("打开财务报表", "https://example.com/report/2024", true);
+            SpreadsheetControl.CellTextAlignment[(1, 4)] = TextAlignment.Left;
+            SpreadsheetControl.CellVerticalAlignment[(1, 4)] = VerticalAlignment.Center;
 
             SpreadsheetControl.Refresh();
         }

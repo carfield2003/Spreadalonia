@@ -74,6 +74,17 @@ namespace Spreadalonia
         }
 
         /// <summary>
+        /// Raised when the user clicks on a <see cref="LinkCell"/> (mouse press + release on the
+        /// link text, or Space key press + release while the cell is selected).
+        /// </summary>
+        public event EventHandler<LinkClickEventArgs> LinkClick;
+
+        internal void RaiseLinkClick(int left, int top, string linkPara)
+        {
+            LinkClick?.Invoke(this, new LinkClickEventArgs(left, top, linkPara));
+        }
+
+        /// <summary>
         /// Defines the <see cref="Data"/> property.
         /// </summary>
         public static readonly DirectProperty<Spreadsheet, Dictionary<(int, int), string>> DataProperty = AvaloniaProperty.RegisterDirect<Spreadsheet, Dictionary<(int, int), string>>(nameof(HeaderFontFamily), o => o.Data);
@@ -351,6 +362,13 @@ namespace Spreadalonia
         public Dictionary<(int, int), TitleCell> TitleCells => IsInitialized ? ContentTable.TitleCells : null;
 
         /// <summary>
+        /// The clickable link cells, indexed by (column, row). When a cell has a link cell, the
+        /// link text is rendered instead of the regular text content, hovering over the link
+        /// shows a hand cursor and clicking it raises the <see cref="LinkClick"/> event.
+        /// </summary>
+        public Dictionary<(int, int), LinkCell> LinkCells => IsInitialized ? ContentTable.LinkCells : null;
+
+        /// <summary>
         /// Adds a background to a range of cells.
         /// </summary>
         /// <param name="range">The range of cells the background is applied to.</param>
@@ -457,6 +475,7 @@ namespace Spreadalonia
             ContentTable.CellVerticalAlignment = rgf.CellVerticalAlignment;
             ContentTable.CellMargin = rgf.CellMargin;
             ContentTable.TitleCells = rgf.TitleCells ?? new Dictionary<(int, int), TitleCell>();
+            ContentTable.LinkCells = rgf.LinkCells ?? new Dictionary<(int, int), LinkCell>();
 
             // RGF loading replaces all cell data; clear any cached formula results
             // and engine state from previously loaded documents or demo data.
@@ -4596,6 +4615,34 @@ namespace Spreadalonia
             Top = top;
             Color = color;
             Handled = false;
+        }
+    }
+
+    /// <summary>
+    /// <see cref="EventArgs"/> for the <see cref="Spreadsheet.LinkClick"/> event.
+    /// </summary>
+    public class LinkClickEventArgs : EventArgs
+    {
+        /// <summary>
+        /// The horizontal coordinate of the cell.
+        /// </summary>
+        public int Left { get; }
+
+        /// <summary>
+        /// The vertical coordinate of the cell.
+        /// </summary>
+        public int Top { get; }
+
+        /// <summary>
+        /// The navigation parameter of the clicked link (e.g. the URL to open).
+        /// </summary>
+        public string LinkPara { get; }
+
+        internal LinkClickEventArgs(int left, int top, string linkPara) : base()
+        {
+            Left = left;
+            Top = top;
+            LinkPara = linkPara;
         }
     }
 }

@@ -171,6 +171,13 @@ namespace Spreadalonia
         /// </summary>
         public Dictionary<(int, int), TitleCell> TitleCells { get; internal set; } = new Dictionary<(int, int), TitleCell>();
 
+        /// <summary>
+        /// The clickable link cells, indexed by (column, row). When a cell has a link cell, the
+        /// link text is rendered instead of the regular text content, hovering over the link
+        /// shows a hand cursor and clicking it raises the <see cref="Spreadsheet.LinkClick"/> event.
+        /// </summary>
+        public Dictionary<(int, int), LinkCell> LinkCells { get; internal set; } = new Dictionary<(int, int), LinkCell>();
+
         private List<CellBackground> _cellBackgrounds = new List<CellBackground>();
 
         /// <summary>
@@ -314,6 +321,7 @@ namespace Spreadalonia
             CellVerticalAlignment = new Dictionary<(int, int), VerticalAlignment>();
             CellMargin = new Dictionary<(int, int), Thickness>();
             TitleCells = new Dictionary<(int, int), TitleCell>();
+            LinkCells = new Dictionary<(int, int), LinkCell>();
 
             this.Transitions = CachedTransitions;
         }
@@ -519,6 +527,18 @@ namespace Spreadalonia
 
                 this.InvalidateVisual();
             }
+            else if (e.Key == Key.Space && !this.Container.IsEditing)
+            {
+                // Pressing Space on a selected single link cell starts a link click (activated on Space-up).
+                if (this.Selection.Count == 1 && this.Selection[0].Width == 0 && this.Selection[0].Height == 0 &&
+                    this.LinkCells.TryGetValue((this.Selection[0].Left, this.Selection[0].Top), out LinkCell keyboardLink))
+                {
+                    pressedLinkCell = keyboardLink;
+                    pressedLinkCellKey = (this.Selection[0].Left, this.Selection[0].Top);
+                    keyboardLink.IsPressed = true;
+                    this.InvalidateVisual();
+                }
+            }
         }
 
         protected override void OnKeyUp(KeyEventArgs e)
@@ -540,6 +560,17 @@ namespace Spreadalonia
 
                 this.InvalidateVisual();
             }
+            else if (e.Key == Key.Space && pressedLinkCell != null)
+            {
+                // Activate the link pressed with Space.
+                LinkCell keyboardLink = pressedLinkCell;
+                (int, int) keyboardLinkKey = pressedLinkCellKey;
+                pressedLinkCell = null;
+                keyboardLink.IsPressed = false;
+                keyboardLink.IsVisited = true;
+                this.Container.RaiseLinkClick(keyboardLinkKey.Item1, keyboardLinkKey.Item2, keyboardLink.LinkPara);
+                this.InvalidateVisual();
+            }
         }
 
         protected override void OnPointerMoved(PointerEventArgs e)
@@ -551,6 +582,13 @@ namespace Spreadalonia
 
             if (!currentPoint.Properties.IsLeftButtonPressed && !currentPoint.Properties.IsRightButtonPressed)
             {
+                // Hovering over a link cell shows a hand cursor.
+                if (TryHitLinkCell(xPos, yPos, out LinkCell hoveredLink, out _))
+                {
+                    this.Cursor = HandCursor;
+                    return;
+                }
+
                 if (Selection.Count == 1)
                 {
                     double selectionLeft = 0;
@@ -819,6 +857,27 @@ namespace Spreadalonia
         {
             base.OnPointerReleased(e);
 
+            // Release a pressed link: if the pointer is still over the link text, activate it.
+            if (pressedLinkCell != null)
+            {
+                PointerPoint currentPoint = e.GetCurrentPoint(this);
+                double xPos = currentPoint.Position.X - lastDrawnDeltaX;
+                double yPos = currentPoint.Position.Y - lastDrawnDeltaY;
+
+                LinkCell releasedLink = pressedLinkCell;
+                (int, int) releasedLinkKey = pressedLinkCellKey;
+                pressedLinkCell = null;
+                releasedLink.IsPressed = false;
+
+                if (releasedLink.HitRect.Contains(new Point(xPos, yPos)))
+                {
+                    releasedLink.IsVisited = true;
+                    this.Container.RaiseLinkClick(releasedLinkKey.Item1, releasedLinkKey.Item2, releasedLink.LinkPara);
+                }
+
+                this.InvalidateVisual();
+            }
+
             if (pointerPressedAction == 2 && (selectionMoveDelta.Item1 != 0 || selectionMoveDelta.Item2 != 0))
             {
                 if (selectionBeingMoved.IsFinite(this))
@@ -1019,6 +1078,39 @@ namespace Spreadalonia
         ImmutableList<SelectionRange> previousSelection;
         SelectionRange selectionBeingMoved;
         bool mouseMoveShiftPressed = false;
+        LinkCell pressedLinkCell = null;
+        (int, int) pressedLinkCellKey = (-1, -1);
+        private static readonly Cursor HandCursor = new Cursor(StandardCursorType.Hand);
+
+        /// <summary>
+        /// Returns the <see cref="LinkCell"/> whose rendered link text rectangle contains the
+        /// given pointer position. The hit rectangles are updated every time the table is drawn,
+        /// so only visible link cells can be hit.
+        /// </summary>
+        private bool TryHitLinkCell(double xPos, double yPos, out LinkCell linkCell, out (int, int) key)
+        {
+            linkCell = null;
+            key = (-1, -1);
+
+            if (this.LinkCells == null || this.LinkCells.Count == 0)
+            {
+                return false;
+            }
+
+            Point p = new Point(xPos, yPos);
+
+            foreach (KeyValuePair<(int, int), LinkCell> kvp in this.LinkCells)
+            {
+                if (kvp.Value != null && kvp.Value.HitRect.Contains(p))
+                {
+                    linkCell = kvp.Value;
+                    key = kvp.Key;
+                    return true;
+                }
+            }
+
+            return false;
+        }
 
         protected override void OnPointerPressed(PointerPressedEventArgs e)
         {
@@ -1176,6 +1268,15 @@ namespace Spreadalonia
 
                 if (currentPoint.Properties.IsLeftButtonPressed && e.ClickCount == 1)
                 {
+                    // Pressing inside a link text area starts a link click (activated on release).
+                    if (TryHitLinkCell(xPos, yPos, out LinkCell pressedLink, out (int, int) pressedLinkKey))
+                    {
+                        pressedLinkCell = pressedLink;
+                        pressedLinkCellKey = pressedLinkKey;
+                        pressedLink.IsPressed = true;
+                        this.InvalidateVisual();
+                    }
+
                     if (e.KeyModifiers == Spreadsheet.ControlModifier)
                     {
                         bool found = false;
@@ -1514,6 +1615,47 @@ namespace Spreadalonia
                                             continue;
                                         }
 
+                                        // Link cells render a clickable hyperlink instead of the default text.
+                                        if (LinkCells.TryGetValue((left + x, top + y), out LinkCell linkCell))
+                                        {
+                                            double linkX = x == 0 ? 0 : xs[x - 1];
+                                            double linkY = y == 0 ? 0 : ys[y - 1];
+
+                                            if (!CellTypefaces.TryGetValue((left + x, top + y), out Typeface linkFace) &&
+                                                !RowTypefaces.TryGetValue(top + y, out linkFace) &&
+                                                !ColumnTypefaces.TryGetValue(left + x, out linkFace))
+                                            {
+                                                linkFace = defaultTypeFace;
+                                            }
+
+                                            double linkFontSize = this.FontSize;
+                                            if (CellFontSize.TryGetValue((left + x, top + y), out double customLinkFontSize))
+                                            {
+                                                linkFontSize = customLinkFontSize;
+                                            }
+
+                                            TextAlignment linkHor = this.DefaultTextAlignment;
+                                            if (CellTextAlignment.TryGetValue((left + x, top + y), out TextAlignment customLinkHor))
+                                            {
+                                                linkHor = customLinkHor;
+                                            }
+
+                                            VerticalAlignment linkVer = this.DefaultVerticalAlignment;
+                                            if (CellVerticalAlignment.TryGetValue((left + x, top + y), out VerticalAlignment customLinkVer))
+                                            {
+                                                linkVer = customLinkVer;
+                                            }
+
+                                            Thickness linkMargin = this.DefaultMargin;
+                                            if (CellMargin.TryGetValue((left + x, top + y), out Thickness customLinkMargin))
+                                            {
+                                                linkMargin = customLinkMargin;
+                                            }
+
+                                            linkCell.Render(context, new Rect(linkX, linkY, xs[x] - linkX, ys[y] - linkY), null, linkMargin, txt, linkFace, linkFontSize, linkHor, linkVer);
+                                            continue;
+                                        }
+
                                         // Determine display text: use formula result if available, otherwise raw text
                                         string displayText = txt;
                                         if (FormulaCells != null && FormulaCells.TryGetValue((left + x, top + y), out CellData formulaCell))
@@ -1644,7 +1786,8 @@ namespace Spreadalonia
 
                                 bool hasMergedData = Data.TryGetValue((mergedRange.Left, mergedRange.Top), out string mergedText);
                                 bool hasMergedTitleCell = TitleCells.TryGetValue((mergedRange.Left, mergedRange.Top), out TitleCell mergedTitleCell);
-                                if (!hasMergedData && !hasMergedTitleCell)
+                                bool hasMergedLinkCell = LinkCells.TryGetValue((mergedRange.Left, mergedRange.Top), out LinkCell mergedLinkCell);
+                                if (!hasMergedData && !hasMergedTitleCell && !hasMergedLinkCell)
                                 {
                                     continue;
                                 }
@@ -1665,6 +1808,51 @@ namespace Spreadalonia
                                     double titleMergeY1 = titleVisibleMerge.Bottom - top < height ? ys[titleVisibleMerge.Bottom - top] : ys[height];
 
                                     mergedTitleCell.Render(context, new Rect(titleMergeX0, titleMergeY0, titleMergeX1 - titleMergeX0, titleMergeY1 - titleMergeY0), null, null);
+                                    continue;
+                                }
+
+                                // Link cells render a clickable hyperlink over the whole merged range.
+                                if (hasMergedLinkCell)
+                                {
+                                    SelectionRange linkVisibleMerge = mergedRange.Intersection(new SelectionRange(left, top, left + width, top + height));
+
+                                    double linkMergeX0 = linkVisibleMerge.Left == left ? 0 : xs[linkVisibleMerge.Left - left - 1];
+                                    double linkMergeY0 = linkVisibleMerge.Top == top ? 0 : ys[linkVisibleMerge.Top - top - 1];
+                                    double linkMergeX1 = linkVisibleMerge.Right - left < width ? xs[linkVisibleMerge.Right - left] : xs[width];
+                                    double linkMergeY1 = linkVisibleMerge.Bottom - top < height ? ys[linkVisibleMerge.Bottom - top] : ys[height];
+
+                                    if (!CellTypefaces.TryGetValue((mergedRange.Left, mergedRange.Top), out Typeface mergedLinkFace) &&
+                                        !RowTypefaces.TryGetValue(mergedRange.Top, out mergedLinkFace) &&
+                                        !ColumnTypefaces.TryGetValue(mergedRange.Left, out mergedLinkFace))
+                                    {
+                                        mergedLinkFace = defaultTypeFace;
+                                    }
+
+                                    double mergedLinkFontSize = this.FontSize;
+                                    if (CellFontSize.TryGetValue((mergedRange.Left, mergedRange.Top), out double mergedCustomLinkFontSize))
+                                    {
+                                        mergedLinkFontSize = mergedCustomLinkFontSize;
+                                    }
+
+                                    TextAlignment mergedLinkHor = TextAlignment.Center;
+                                    if (CellTextAlignment.TryGetValue((mergedRange.Left, mergedRange.Top), out TextAlignment mergedCustomLinkHor))
+                                    {
+                                        mergedLinkHor = mergedCustomLinkHor;
+                                    }
+
+                                    VerticalAlignment mergedLinkVer = VerticalAlignment.Center;
+                                    if (CellVerticalAlignment.TryGetValue((mergedRange.Left, mergedRange.Top), out VerticalAlignment mergedCustomLinkVer))
+                                    {
+                                        mergedLinkVer = mergedCustomLinkVer;
+                                    }
+
+                                    Thickness mergedLinkMargin = new Thickness(3);
+                                    if (CellMargin.TryGetValue((mergedRange.Left, mergedRange.Top), out Thickness mergedCustomLinkMargin))
+                                    {
+                                        mergedLinkMargin = mergedCustomLinkMargin;
+                                    }
+
+                                    mergedLinkCell.Render(context, new Rect(linkMergeX0, linkMergeY0, linkMergeX1 - linkMergeX0, linkMergeY1 - linkMergeY0), null, mergedLinkMargin, mergedText, mergedLinkFace, mergedLinkFontSize, mergedLinkHor, mergedLinkVer);
                                     continue;
                                 }
 
