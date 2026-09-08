@@ -487,6 +487,73 @@ namespace Spreadalonia
         }
 
         /// <summary>
+        /// Saves the current content of the spreadsheet to an Excel .xlsx stream, using the
+        /// default <see cref="XlsxExportOptions"/>.
+        /// </summary>
+        /// <param name="stream">The stream the .xlsx document is written to.</param>
+        public void SaveXlsx(Stream stream)
+        {
+            SaveXlsx(stream, null);
+        }
+
+        /// <summary>
+        /// Saves the current content of the spreadsheet to an Excel .xlsx stream.
+        /// </summary>
+        /// <param name="stream">The stream the .xlsx document is written to.</param>
+        /// <param name="options">The options controlling the export, or <see langword="null"/> to use the defaults.</param>
+        public void SaveXlsx(Stream stream, XlsxExportOptions options)
+        {
+            if (stream == null)
+            {
+                throw new ArgumentNullException(nameof(stream));
+            }
+
+            if (!IsInitialized)
+            {
+                throw new InvalidOperationException("The spreadsheet must be initialised before it can be exported to xlsx.");
+            }
+
+            XlsxExporter.Export(ContentTable, stream, options);
+        }
+
+        /// <summary>
+        /// Saves the current content of the spreadsheet to an Excel .xlsx file.
+        /// </summary>
+        /// <param name="fileName">The path of the .xlsx file to create.</param>
+        /// <param name="options">The options controlling the export, or <see langword="null"/> to use the defaults.</param>
+        public void SaveXlsx(string fileName, XlsxExportOptions options = null)
+        {
+            if (string.IsNullOrEmpty(fileName))
+            {
+                throw new ArgumentNullException(nameof(fileName));
+            }
+
+            using (FileStream fileStream = File.Create(fileName))
+            {
+                SaveXlsx(fileStream, options);
+            }
+        }
+
+        /// <summary>
+        /// Removes all cell data, formulas and cached formula results, leaving the spreadsheet
+        /// grid (column widths, row heights, merges and cell-level styles) otherwise untouched.
+        /// </summary>
+        public void ClearContent()
+        {
+            if (!IsInitialized)
+            {
+                return;
+            }
+
+            ContentTable.Data?.Clear();
+            ContentTable.FormulaCells?.Clear();
+            this.FormulaEngine?.Clear();
+
+            ContentTable.InvalidateVisual();
+            InvalidateVisual();
+        }
+
+        /// <summary>
         /// Defines the <see cref="SpreadsheetBackground"/> property.
         /// </summary>
         public static readonly StyledProperty<SolidColorBrush> GridBackgroundProperty = AvaloniaProperty.Register<Spreadsheet, SolidColorBrush>(nameof(SpreadsheetBackground), new SolidColorBrush(Colors.White));

@@ -101,6 +101,28 @@ namespace Demo
                     }
                 };
             }
+
+            // Automated xlsx export smoke test.
+            if (Environment.GetCommandLineArgs().Any(a => a == "--xlsx-export-test"))
+            {
+                Opened += async (_, _) =>
+                {
+                    try
+                    {
+                        await System.Threading.Tasks.Task.Delay(400);
+                        string path = BuildAndExportXlsxDemo();
+                        Console.WriteLine("[Test] Xlsx export saved: " + path);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine("[Test] EXCEPTION: " + ex);
+                    }
+                    finally
+                    {
+                        Environment.Exit(0);
+                    }
+                };
+            }
         }
 
         private void SaveScreenshot(string path)
@@ -623,6 +645,207 @@ namespace Demo
             SpreadsheetControl.CellVerticalAlignment[(1, 4)] = VerticalAlignment.Center;
 
             SpreadsheetControl.Refresh();
+        }
+
+        private void XlsxExportButton_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+        {
+            try
+            {
+                string path = BuildAndExportXlsxDemo();
+                Console.WriteLine("[Xlsx] Saved: " + path);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("[Xlsx] EXCEPTION: " + ex);
+            }
+        }
+
+        /// <summary>
+        /// Builds a small report that exercises every cell type supported by the xlsx exporter
+        /// (TitleCell, LinkCell, formulas, merged ranges, backgrounds, borders and cell styles),
+        /// then saves it as an Excel .xlsx file on the Desktop.
+        /// </summary>
+        private string BuildAndExportXlsxDemo()
+        {
+            // Reset formatting and table bounds.
+            SpreadsheetControl.MergedRanges = null;
+            SpreadsheetControl.CellBackgrounds = null;
+            SpreadsheetControl.CellBorders = null;
+            SpreadsheetControl.MaxTableWidth = int.MaxValue - 2;
+            SpreadsheetControl.MaxTableHeight = int.MaxValue - 2;
+            SpreadsheetControl.CellFontSize?.Clear();
+            SpreadsheetControl.CellTypefaces?.Clear();
+            SpreadsheetControl.CellForeground?.Clear();
+            SpreadsheetControl.CellTextAlignment?.Clear();
+            SpreadsheetControl.CellVerticalAlignment?.Clear();
+            SpreadsheetControl.CellMargin?.Clear();
+            SpreadsheetControl.TitleCells?.Clear();
+            SpreadsheetControl.LinkCells?.Clear();
+            SpreadsheetControl.ClearContent();
+
+            var data = new Dictionary<(int, int), string>
+            {
+                // Row 0: TitleCell body lives in (0,0), merged over columns 0..4.
+                [(0, 0)] = "",
+
+                // Row 1: headers
+                [(0, 1)] = "产品",
+                [(1, 1)] = "数量",
+                [(2, 1)] = "单价",
+                [(3, 1)] = "金额",
+                [(4, 1)] = "详情",
+
+                // Row 2: item A (Excel row 3)
+                [(0, 2)] = "产品A",
+                [(1, 2)] = "12",
+                [(2, 2)] = "25.5",
+                [(3, 2)] = "=C3*B3",
+
+                // Row 3: item B (Excel row 4)
+                [(0, 3)] = "产品B",
+                [(1, 3)] = "8",
+                [(2, 3)] = "42.0",
+                [(3, 3)] = "=C4*B4",
+
+                // Row 4: summary (Excel row 5)
+                [(0, 4)] = "合计",
+                [(1, 4)] = "=SUM(B3:B4)",
+                [(2, 4)] = "=SUM(C3:C4)",
+                [(3, 4)] = "=SUM(D3:D4)",
+            };
+
+            SpreadsheetControl.SetData(data);
+
+            // Row heights and column widths.
+            SpreadsheetControl.SetHeight(new Dictionary<int, double>
+            {
+                [0] = 60,
+                [1] = 26,
+                [2] = 26,
+                [3] = 26,
+                [4] = 26,
+            });
+            SpreadsheetControl.SetWidth(new Dictionary<int, double>
+            {
+                [0] = 110,
+                [1] = 90,
+                [2] = 90,
+                [3] = 120,
+                [4] = 100,
+            });
+
+            // Merge the title row across all five columns.
+            SpreadsheetControl.MergedRanges = new List<SelectionRange>
+            {
+                new SelectionRange(0, 0, 4, 0)
+            };
+
+            // TitleCell with a main line and a subtitle line.
+            double titleOrgHeight = 60;
+            var titleCell = new TitleCell(new List<TitleCell.Chunk>
+            {
+                new TitleCell.Chunk
+                {
+                    Text = "2026年销售汇总报表",
+                    FontName = "微软雅黑",
+                    FontSize = 20,
+                    Color = Brushes.White,
+                    HorAlign = TextAlignment.Center,
+                    VerAlign = VerticalAlignment.Bottom,
+                    Top = 0,
+                    Height = titleOrgHeight * 0.62
+                },
+                new TitleCell.Chunk
+                {
+                    Text = "2026.1 - 2026.9",
+                    FontName = "微软雅黑",
+                    FontSize = 11,
+                    Color = new SolidColorBrush(Color.Parse("#DCE6F1")),
+                    HorAlign = TextAlignment.Center,
+                    VerAlign = VerticalAlignment.Top,
+                    Top = titleOrgHeight * 0.62,
+                    Height = titleOrgHeight * 0.38
+                }
+            })
+            {
+                OrgHeight = titleOrgHeight
+            };
+            SpreadsheetControl.TitleCells[(0, 0)] = titleCell;
+
+            // Link cells in the "详情" column.
+            SpreadsheetControl.LinkCells[(4, 2)] = new LinkCell("查看产品A", "https://example.com/products/A");
+            SpreadsheetControl.LinkCells[(4, 3)] = new LinkCell("查看产品B", "https://example.com/products/B", true);
+
+            // Colours.
+            var titleBlue = new SolidColorBrush(Color.Parse("#4472C4"));
+            var headerLightBlue = new SolidColorBrush(Color.Parse("#D9E2F3"));
+            var summaryGreen = new SolidColorBrush(Color.Parse("#E2EFDA"));
+            var black = new SolidColorBrush(Color.Parse("#000000"));
+
+            SpreadsheetControl.CellBackgrounds = new List<CellBackground>
+            {
+                new CellBackground(new SelectionRange(0, 0, 4, 0), titleBlue),
+                new CellBackground(new SelectionRange(0, 1, 4, 1), headerLightBlue),
+                new CellBackground(new SelectionRange(0, 4, 3, 4), summaryGreen),
+            };
+
+            SpreadsheetControl.CellBorders = new List<CellBorder>
+            {
+                // Outer frame (rows 0..4, columns 0..4).
+                new CellBorder(true, 0, 0, 4, black, 1),
+                new CellBorder(true, 5, 0, 4, black, 1),
+                new CellBorder(false, 0, 0, 4, black, 1),
+                new CellBorder(false, 5, 0, 4, black, 1),
+
+                // Title bottom and header bottom.
+                new CellBorder(true, 1, 0, 4, black, 1),
+                new CellBorder(true, 2, 0, 4, black, 1),
+
+                // Vertical separators in the data area.
+                new CellBorder(false, 1, 1, 4, black, 1),
+                new CellBorder(false, 2, 1, 4, black, 1),
+                new CellBorder(false, 3, 1, 4, black, 1),
+                new CellBorder(false, 4, 1, 4, black, 1),
+            };
+
+            // Header row: bold white-ish text on the light blue background, centred.
+            for (int c = 0; c <= 4; c++)
+            {
+                SpreadsheetControl.CellTypefaces[(c, 1)] = new Typeface(FontFamily.Default, FontStyle.Normal, FontWeight.Bold);
+                SpreadsheetControl.CellTextAlignment[(c, 1)] = TextAlignment.Center;
+                SpreadsheetControl.CellVerticalAlignment[(c, 1)] = VerticalAlignment.Center;
+            }
+
+            // Right-align numbers, centre the details links.
+            for (int r = 2; r <= 4; r++)
+            {
+                SpreadsheetControl.CellTextAlignment[(1, r)] = TextAlignment.Right;
+                SpreadsheetControl.CellTextAlignment[(2, r)] = TextAlignment.Right;
+                SpreadsheetControl.CellTextAlignment[(3, r)] = TextAlignment.Right;
+                SpreadsheetControl.CellTextAlignment[(4, r)] = TextAlignment.Center;
+                SpreadsheetControl.CellVerticalAlignment[(4, r)] = VerticalAlignment.Center;
+            }
+
+            // Emphasise the grand-total amount.
+            SpreadsheetControl.CellTypefaces[(3, 4)] = new Typeface(FontFamily.Default, FontStyle.Normal, FontWeight.Bold);
+            SpreadsheetControl.CellFontSize[(3, 4)] = 12;
+
+            SpreadsheetControl.Refresh();
+
+            string folder = Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
+            if (string.IsNullOrEmpty(folder))
+            {
+                folder = AppContext.BaseDirectory;
+            }
+            string path = Path.Combine(folder, "spreadalonia_export_demo.xlsx");
+
+            SpreadsheetControl.SaveXlsx(path, new XlsxExportOptions
+            {
+                ExportLinkAsHyperlink = true,
+                WarningHandler = msg => Console.WriteLine("[Xlsx] warning: " + msg),
+            });
+
+            return path;
         }
 
         private void LoadRgfDemo()

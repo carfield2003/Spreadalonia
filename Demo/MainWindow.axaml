@@ -14,6 +14,7 @@
 			<Button x:Name="LoadTwoRgfButton" Content="Load Two RGFs (bug repro)" Click="LoadTwoRgfButton_Click"/>
 			<Button x:Name="TitleCellButton" Content="TitleCell Demo" Click="TitleCellButton_Click"/>
 			<Button x:Name="LinkCellButton" Content="LinkCell Demo" Click="LinkCellButton_Click"/>
+			<Button x:Name="XlsxExportButton" Content="Export Xlsx Demo" Click="XlsxExportButton_Click"/>
 		</StackPanel>
 		<local:Spreadsheet x:Name="SpreadsheetControl">
 		</local:Spreadsheet>
