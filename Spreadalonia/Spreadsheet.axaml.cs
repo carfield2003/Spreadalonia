@@ -85,6 +85,39 @@ namespace Spreadalonia
         }
 
         /// <summary>
+        /// Raised when the user clicks the +/- box of a <see cref="TreeGradeCell"/>.
+        /// </summary>
+        public event EventHandler<TreeCellExpandedEventArgs> TreeExpand;
+
+        internal void RaiseTreeExpand(int column, int row, TreeGradeCell cell, bool isExpanded)
+        {
+            TreeExpand?.Invoke(this, new TreeCellExpandedEventArgs(column, row, cell, isExpanded));
+        }
+
+        /// <summary>
+        /// Raised when the value typed into a <see cref="NumericCell"/> is rejected. The cell keeps
+        /// its previous value and nothing is pushed onto the Undo stack.
+        /// </summary>
+        public event EventHandler<InvalidInputEventArgs> InvalidInput;
+
+        internal void RaiseInvalidInput(int column, int row, string inputText, string reason)
+        {
+            InvalidInput?.Invoke(this, new InvalidInputEventArgs(column, row, inputText, reason));
+        }
+
+        /// <summary>
+        /// Raised after the editing box has been committed (or cancelled with Escape). The cell
+        /// data has already been written when this is raised, so the handler may read the new
+        /// value and write other cells (e.g. to propagate a total).
+        /// </summary>
+        public event EventHandler<CellEditEndedEventArgs> CellEditEnded;
+
+        internal void RaiseCellEditEnded(int column, int row, string oldText, string newText, bool cancelled, bool rejected = false)
+        {
+            CellEditEnded?.Invoke(this, new CellEditEndedEventArgs(column, row, oldText, newText, cancelled, rejected));
+        }
+
+        /// <summary>
         /// Defines the <see cref="Data"/> property.
         /// </summary>
         public static readonly DirectProperty<Spreadsheet, Dictionary<(int, int), string>> DataProperty = AvaloniaProperty.RegisterDirect<Spreadsheet, Dictionary<(int, int), string>>(nameof(HeaderFontFamily), o => o.Data);
@@ -369,6 +402,124 @@ namespace Spreadalonia
         public Dictionary<(int, int), LinkCell> LinkCells => IsInitialized ? ContentTable.LinkCells : null;
 
         /// <summary>
+        /// The account-tree cells, indexed by (column, row). A tree cell renders an indented
+        /// caption with dotted guide lines and a +/- toggle box; clicking the box raises
+        /// <see cref="TreeExpand"/> and collapses / expands the rows below.
+        /// </summary>
+        public Dictionary<(int, int), TreeGradeCell> TreeCells => IsInitialized ? ContentTable.TreeCells : null;
+
+        /// <summary>
+        /// The numeric cells, indexed by (column, row). A numeric cell displays its raw value with
+        /// thousand separators and a fixed number of decimals, and only accepts numeric input.
+        /// </summary>
+        public Dictionary<(int, int), NumericCell> NumericCells => IsInitialized ? ContentTable.NumericCells : null;
+
+        /// <summary>
+        /// The rows that are currently hidden (collapsed).
+        /// </summary>
+        public HashSet<int> HiddenRows => IsInitialized ? ContentTable.HiddenRows : null;
+
+        /// <summary>
+        /// The ranges whose cells cannot be edited.
+        /// </summary>
+        public List<SelectionRange> ReadonlyRanges => IsInitialized ? ContentTable.ReadonlyRanges : null;
+
+        /// <summary>
+        /// Whether the spreadsheet maintains <see cref="HiddenRows"/> itself when a tree cell is
+        /// toggled. Set this to <see langword="false"/> to control row visibility from the
+        /// <see cref="TreeExpand"/> handler instead.
+        /// </summary>
+        public bool AutoManageRows
+        {
+            get { return IsInitialized && ContentTable.AutoManageRows; }
+            set { if (IsInitialized) { ContentTable.AutoManageRows = value; } }
+        }
+
+        /// <summary>
+        /// Shows or hides a row.
+        /// </summary>
+        /// <param name="row">The row index.</param>
+        /// <param name="visible"><see langword="true"/> to show the row, <see langword="false"/> to hide it.</param>
+        public void SetRowVisible(int row, bool visible)
+        {
+            if (IsInitialized)
+            {
+                ContentTable.SetRowVisible(row, visible);
+            }
+        }
+
+        /// <summary>
+        /// Shows every row again.
+        /// </summary>
+        public void ShowAllRows()
+        {
+            if (IsInitialized)
+            {
+                ContentTable.ShowAllRows();
+            }
+        }
+
+        /// <summary>
+        /// Checks whether a row is currently visible.
+        /// </summary>
+        /// <param name="row">The row index.</param>
+        /// <returns><see langword="true"/> if the row is not hidden.</returns>
+        public bool IsRowVisible(int row)
+        {
+            return !IsInitialized || ContentTable.IsRowVisible(row);
+        }
+
+        /// <summary>
+        /// Toggles the <see cref="TreeGradeCell"/> at the specified cell, as if the user had
+        /// clicked its +/- box.
+        /// </summary>
+        /// <param name="column">The column of the tree cell.</param>
+        /// <param name="row">The row of the tree cell.</param>
+        public void ToggleTreeCell(int column, int row)
+        {
+            if (IsInitialized && ContentTable.TreeCells.TryGetValue((column, row), out TreeGradeCell cell) && cell != null)
+            {
+                ContentTable.ToggleTreeCell(column, row, cell);
+            }
+        }
+
+        /// <summary>
+        /// Checks whether a cell belongs to one of the <see cref="ReadonlyRanges"/>.
+        /// </summary>
+        /// <param name="column">The column of the cell.</param>
+        /// <param name="row">The row of the cell.</param>
+        /// <returns><see langword="true"/> if the cell cannot be edited.</returns>
+        public bool IsCellReadonly(int column, int row)
+        {
+            return IsInitialized && ContentTable.IsCellReadonly(column, row);
+        }
+
+        /// <summary>
+        /// Marks a range as read-only (or makes it editable again). Read-only cells cannot be
+        /// edited, pasted into or cleared, but they can still be selected and copied.
+        /// </summary>
+        /// <param name="range">The range to protect.</param>
+        /// <param name="readOnly"><see langword="true"/> to make the range read-only.</param>
+        public void SetRangeReadonly(SelectionRange range, bool readOnly)
+        {
+            if (IsInitialized)
+            {
+                ContentTable.SetRangeReadonly(range, readOnly);
+            }
+        }
+
+        /// <summary>
+        /// Removes every read-only range.
+        /// </summary>
+        public void ClearReadonlyRanges()
+        {
+            if (IsInitialized)
+            {
+                ContentTable.ClearReadonlyRanges();
+            }
+        }
+
+        /// <summary>
         /// Adds a background to a range of cells.
         /// </summary>
         /// <param name="range">The range of cells the background is applied to.</param>
@@ -549,6 +700,12 @@ namespace Spreadalonia
             ContentTable.FormulaCells?.Clear();
             this.FormulaEngine?.Clear();
 
+            ContentTable.TreeCells?.Clear();
+            ContentTable.NumericCells?.Clear();
+            ContentTable.HiddenRows?.Clear();
+            ContentTable.ReadonlyRanges?.Clear();
+            ContentTable.InvalidateTreeCache();
+
             ContentTable.InvalidateVisual();
             InvalidateVisual();
         }
@@ -715,6 +872,28 @@ namespace Spreadalonia
 
 
         internal (int, int) EditingCell { get; set; }
+
+        /// <summary>
+        /// Set to <see langword="true"/> while the pending edit is being cancelled with Escape.
+        /// </summary>
+        private bool editCancelled = false;
+
+        /// <summary>
+        /// The <see cref="NumericCell"/> of the cell currently being edited, or <see langword="null"/>
+        /// when the cell is a plain text cell.
+        /// </summary>
+        private NumericCell editingNumericCell = null;
+
+        /// <summary>
+        /// The last edit-box content that passed the numeric filter; used to roll back rejected
+        /// keystrokes.
+        /// </summary>
+        private string lastAcceptedEditText = "";
+
+        /// <summary>
+        /// The content of the editing box at the moment the edit was cancelled with Escape.
+        /// </summary>
+        private string cancelledEditAttempt = null;
 
         internal Stack<StackFrame<(int, int), string>> UndoStack { get; } = new Stack<StackFrame<(int, int), string>>();
         internal Stack<StackFrame<(int, int), IBrush>> UndoStackCellForeground { get; } = new Stack<StackFrame<(int, int), IBrush>>();
@@ -920,6 +1099,20 @@ namespace Spreadalonia
             {
                 if (e.Property == TextBox.TextProperty)
                 {
+                    if (editingNumericCell != null && editingNumericCell.FilterWhileTyping &&
+                        !NumberFormatter.IsTypingValid(EditingBox.Text, editingNumericCell.Digits, editingNumericCell.AllowNegative))
+                    {
+                        // Reject the keystroke by restoring the last accepted content.
+                        string accepted = lastAcceptedEditText;
+                        int caret = accepted.Length;
+                        EditingBox.Text = accepted;
+                        EditingBox.SelectionStart = caret;
+                        EditingBox.SelectionEnd = caret;
+                        return;
+                    }
+
+                    lastAcceptedEditText = EditingBox.Text;
+
                     FormattedText txt = new FormattedText(EditingBox.Text, CultureInfo.CurrentCulture, FlowDirection.LeftToRight,
                         new Typeface(EditingBox.FontFamily, EditingBox.FontStyle, EditingBox.FontWeight),
                         EditingBox.FontSize, Foreground);
@@ -933,9 +1126,38 @@ namespace Spreadalonia
             {
                 if (IsEditing)
                 {
-                    string newText = EditingBox.Text;
+                    string attemptedText = cancelledEditAttempt ?? EditingBox.Text;
+                    string newText = attemptedText;
+
+                    bool cancelled = editCancelled;
+                    bool rejected = false;
+                    editCancelled = false;
+                    cancelledEditAttempt = null;
 
                     bool present = ContentTable.Data.TryGetValue(this.EditingCell, out string prevVal);
+
+                    // Numeric cells validate on commit: an invalid value is rejected, the cell
+                    // keeps its previous content and nothing is pushed onto the Undo stack.
+                    if (!cancelled && editingNumericCell != null)
+                    {
+                        if (editingNumericCell.TryValidate(newText, out string normalized, out string error))
+                        {
+                            newText = normalized ?? "";
+                        }
+                        else
+                        {
+                            this.RaiseInvalidInput(this.EditingCell.Item1, this.EditingCell.Item2, newText, error);
+                            cancelled = true;
+                            rejected = true;
+                            newText = prevVal ?? "";
+                        }
+                    }
+
+                    if (cancelled)
+                    {
+                        newText = prevVal ?? "";
+                    }
+
                     bool wasFormula = ContentTable.FormulaCells != null &&
                                       ContentTable.FormulaCells.ContainsKey(this.EditingCell);
 
@@ -1010,6 +1232,11 @@ namespace Spreadalonia
 
                     IsEditing = false;
                     ContentTable.InvalidateVisual();
+
+                    this.RaiseCellEditEnded(this.EditingCell.Item1, this.EditingCell.Item2, prevVal,
+                        cancelled ? attemptedText : newText, cancelled, rejected);
+
+                    editingNumericCell = null;
                 }
             };
 
@@ -1030,13 +1257,13 @@ namespace Spreadalonia
                     }
                     else if (e.KeyModifiers == KeyModifiers.None)
                     {
-                        this.Selection = ImmutableList.Create(new SelectionRange(EditingCell.Item1, EditingCell.Item2 + 1));
+                        this.Selection = ImmutableList.Create(new SelectionRange(EditingCell.Item1, ContentTable.NextVisibleRow(EditingCell.Item2, 1)));
                         ContentTable.Focus();
                         e.Handled = true;
                     }
                     else if (e.KeyModifiers == KeyModifiers.Shift)
                     {
-                        this.Selection = ImmutableList.Create(new SelectionRange(EditingCell.Item1, Math.Max(0, EditingCell.Item2 - 1)));
+                        this.Selection = ImmutableList.Create(new SelectionRange(EditingCell.Item1, ContentTable.NextVisibleRow(EditingCell.Item2, -1)));
                         ContentTable.Focus();
                         e.Handled = true;
                     }
@@ -1064,6 +1291,8 @@ namespace Spreadalonia
                         txt = null;
                     }
 
+                    cancelledEditAttempt = EditingBox.Text;
+                    editCancelled = true;
                     EditingBox.Text = txt;
                     ContentTable.Focus();
                     e.Handled = true;
@@ -1159,10 +1388,23 @@ namespace Spreadalonia
             {
                 if (IsEditing)
                 {
+                    // Read-only cells can be selected and copied but never edited.
+                    if (ContentTable != null && ContentTable.IsCellReadonly(EditingCell.Item1, EditingCell.Item2))
+                    {
+                        IsEditing = false;
+                        return;
+                    }
+
                     HorizontalScrollBar.IsEnabled = false;
                     VerticalScrollBar.IsEnabled = false;
 
                     Table table = ContentTable;
+
+                    editingNumericCell = null;
+                    if (table.NumericCells != null && table.NumericCells.TryGetValue(EditingCell, out NumericCell numericCell) && numericCell != null)
+                    {
+                        editingNumericCell = numericCell;
+                    }
 
                     double left = EditingCell.Item1 - table.lastDrawnLeft > 0 ? table.lastDrawnXs[EditingCell.Item1 - table.lastDrawnLeft - 1] : 0;
                     double top = EditingCell.Item2 - table.lastDrawnTop > 0 ? table.lastDrawnYs[EditingCell.Item2 - table.lastDrawnTop - 1] : 0;
@@ -1797,9 +2039,12 @@ namespace Spreadalonia
         {
             if (this.Selection.Count > 0)
             {
-                string txt = this.GetTextRepresentation(this.Selection);
+                // Hidden rows never take part in a copy.
+                ImmutableList<SelectionRange> visibleSelection = this.GetVisibleSelection();
+
+                string txt = this.GetTextRepresentation(visibleSelection);
                 _ = TopLevel.GetTopLevel(this)?.Clipboard.SetTextAsync(txt);
-                IconOverlay.Selection = this.Selection.RemoveDuplicates().ToImmutableList();
+                IconOverlay.Selection = visibleSelection.RemoveDuplicates().ToImmutableList();
                 IconOverlay.Icon = Overlay.IconType.Copy;
                 IconOverlay.PauseTransitions();
                 IconOverlay.Opacity = 1;
@@ -1828,29 +2073,85 @@ namespace Spreadalonia
         {
             if (this.Selection.Count > 0)
             {
-                // Clear formula cells in the selection first
-                foreach (var sel in this.Selection)
+                Table table = ContentTable;
+                Dictionary<(int, int), string> data = table.Data;
+                Dictionary<(int, int), string> changedData = new Dictionary<(int, int), string>();
+                Dictionary<(int, int), string> newData = new Dictionary<(int, int), string>();
+
+                foreach (SelectionRange sel in this.Selection)
                 {
                     for (int col = sel.Left; col <= sel.Right; col++)
                     {
                         for (int row = sel.Top; row <= sel.Bottom; row++)
                         {
-                            var key = (col, row);
-                            if (ContentTable.FormulaCells.ContainsKey(key))
+                            // Hidden rows and read-only cells are left untouched.
+                            if (table.IsRowHidden(row) || table.IsCellReadonly(col, row))
                             {
-                                ContentTable.FormulaCells.Remove(key);
+                                continue;
+                            }
+
+                            var key = (col, row);
+
+                            if (table.FormulaCells != null && table.FormulaCells.ContainsKey(key))
+                            {
+                                table.FormulaCells.Remove(key);
                                 this.FormulaEngine.RemoveCell(key);
+                            }
+
+                            if (data.TryGetValue(key, out string prev))
+                            {
+                                changedData[key] = prev;
+                                newData[key] = null;
+                                data.Remove(key);
                             }
                         }
                     }
                 }
 
-                ContentTable.Data = ContentTable.Data.Remove(this.Selection, this.UndoStack);
+                this.UndoStack.Push(new StackFrame<(int, int), string>(this.Selection, changedData, newData));
                 PushNonDataStackNull();
                 this.ClearRedoStack();
 
-                ContentTable.InvalidateVisual();
+                table.InvalidateVisual();
             }
+        }
+
+        /// <summary>
+        /// Returns the current selection with every hidden row removed, so that copy / fill
+        /// operations never touch collapsed rows.
+        /// </summary>
+        private ImmutableList<SelectionRange> GetVisibleSelection()
+        {
+            Table table = ContentTable;
+
+            if (table == null || table.HiddenRows.Count == 0)
+            {
+                return this.Selection;
+            }
+
+            ImmutableList<SelectionRange>.Builder builder = ImmutableList.CreateBuilder<SelectionRange>();
+
+            foreach (SelectionRange sel in this.Selection)
+            {
+                int start = -1;
+
+                for (int row = sel.Top; row <= sel.Bottom + 1; row++)
+                {
+                    bool visible = row <= sel.Bottom && table.IsRowVisible(row);
+
+                    if (visible && start < 0)
+                    {
+                        start = row;
+                    }
+                    else if (!visible && start >= 0)
+                    {
+                        builder.Add(new SelectionRange(sel.Left, start, sel.Right, row - 1));
+                        start = -1;
+                    }
+                }
+            }
+
+            return builder.Count > 0 ? builder.ToImmutable() : ImmutableList<SelectionRange>.Empty;
         }
 
         /// <summary>
@@ -1924,6 +2225,12 @@ namespace Spreadalonia
                         {
                             for (int x = 0; x < width; x++)
                             {
+                                // Hidden rows and read-only cells are skipped.
+                                if (table.IsRowHidden(y + selection.Top) || table.IsCellReadonly(x + selection.Left, y + selection.Top))
+                                {
+                                    continue;
+                                }
+
                                 if (x < cells[y].Length && !string.IsNullOrEmpty(cells[y][x]))
                                 {
                                     if (data.TryGetValue((x + selection.Left, y + selection.Top), out string val))
@@ -1964,6 +2271,12 @@ namespace Spreadalonia
                             {
                                 int realX = x % width;
                                 int realY = y % height;
+
+                                // Hidden rows and read-only cells are skipped.
+                                if (table.IsRowHidden(y + selection.Top) || table.IsCellReadonly(x + selection.Left, y + selection.Top))
+                                {
+                                    continue;
+                                }
 
                                 if (realX < cells[realY].Length && !string.IsNullOrEmpty(cells[realY][realX]))
                                 {
@@ -3380,13 +3693,13 @@ namespace Spreadalonia
                     {
                         if (e.KeyModifiers == KeyModifiers.None)
                         {
-                            this.Selection = ImmutableList.Create(new SelectionRange(startSelection.Left, startSelection.Top + 1));
+                            this.Selection = ImmutableList.Create(new SelectionRange(startSelection.Left, ContentTable.MoveVisibleRows(startSelection.Top, 1)));
                         }
                         else if (e.KeyModifiers == KeyModifiers.Shift)
                         {
                             if (!this.Selection[this.Selection.Count - 1].IsColumns(ContentTable))
                             {
-                                this.Selection = this.Selection.SetItem(this.Selection.Count - 1, new SelectionRange(startSelection.Left, startSelection.Top, startSelection.Right, startSelection.Bottom + 1));
+                                this.Selection = this.Selection.SetItem(this.Selection.Count - 1, new SelectionRange(startSelection.Left, startSelection.Top, startSelection.Right, ContentTable.MoveVisibleRows(startSelection.Bottom, 1)));
                             }
                         }
                         else if (e.KeyModifiers == KeyModifiers.Alt)
@@ -3419,13 +3732,13 @@ namespace Spreadalonia
                     {
                         if (e.KeyModifiers == KeyModifiers.None)
                         {
-                            this.Selection = ImmutableList.Create(new SelectionRange(startSelection.Left, Math.Max(0, startSelection.Top - 1)));
+                            this.Selection = ImmutableList.Create(new SelectionRange(startSelection.Left, ContentTable.MoveVisibleRows(startSelection.Top, -1)));
                         }
                         else if (e.KeyModifiers == KeyModifiers.Shift)
                         {
                             if (!this.Selection[this.Selection.Count - 1].IsColumns(ContentTable))
                             {
-                                this.Selection = this.Selection.SetItem(this.Selection.Count - 1, new SelectionRange(startSelection.Left, Math.Max(0, startSelection.Top - 1), startSelection.Right, startSelection.Bottom));
+                                this.Selection = this.Selection.SetItem(this.Selection.Count - 1, new SelectionRange(startSelection.Left, ContentTable.MoveVisibleRows(startSelection.Top, -1), startSelection.Right, startSelection.Bottom));
                             }
                         }
                         else if (e.KeyModifiers == KeyModifiers.Alt)
@@ -3536,11 +3849,11 @@ namespace Spreadalonia
                     {
                         if (e.KeyModifiers == KeyModifiers.None)
                         {
-                            this.Selection = ImmutableList.Create(new SelectionRange(startSelection.Left, startSelection.Top + 1));
+                            this.Selection = ImmutableList.Create(new SelectionRange(startSelection.Left, ContentTable.MoveVisibleRows(startSelection.Top, 1)));
                         }
                         else if (e.KeyModifiers == KeyModifiers.Shift)
                         {
-                            this.Selection = ImmutableList.Create(new SelectionRange(startSelection.Left, Math.Max(0, startSelection.Top - 1)));
+                            this.Selection = ImmutableList.Create(new SelectionRange(startSelection.Left, ContentTable.MoveVisibleRows(startSelection.Top, -1)));
                         }
                         else if (e.KeyModifiers == KeyModifiers.Alt)
                         {
@@ -3703,13 +4016,13 @@ namespace Spreadalonia
 
                         if (e.KeyModifiers == KeyModifiers.None)
                         {
-                            this.Selection = ImmutableList.Create(new SelectionRange(startSelection.Left, startSelection.Top + pageSize));
+                            this.Selection = ImmutableList.Create(new SelectionRange(startSelection.Left, ContentTable.MoveVisibleRows(startSelection.Top, pageSize)));
                         }
                         else if (e.KeyModifiers == KeyModifiers.Shift)
                         {
                             if (!this.Selection[this.Selection.Count - 1].IsColumns(ContentTable))
                             {
-                                this.Selection = this.Selection.SetItem(this.Selection.Count - 1, new SelectionRange(startSelection.Left, startSelection.Top, startSelection.Right, startSelection.Bottom + pageSize));
+                                this.Selection = this.Selection.SetItem(this.Selection.Count - 1, new SelectionRange(startSelection.Left, startSelection.Top, startSelection.Right, ContentTable.MoveVisibleRows(startSelection.Bottom, pageSize)));
                             }
                         }
                         else if (e.KeyModifiers == KeyModifiers.Alt)
@@ -3744,13 +4057,13 @@ namespace Spreadalonia
 
                         if (e.KeyModifiers == KeyModifiers.None)
                         {
-                            this.Selection = ImmutableList.Create(new SelectionRange(startSelection.Left, Math.Max(0, startSelection.Top - pageSize)));
+                            this.Selection = ImmutableList.Create(new SelectionRange(startSelection.Left, ContentTable.MoveVisibleRows(startSelection.Top, -pageSize)));
                         }
                         else if (e.KeyModifiers == KeyModifiers.Shift)
                         {
                             if (!this.Selection[this.Selection.Count - 1].IsColumns(ContentTable))
                             {
-                                this.Selection = this.Selection.SetItem(this.Selection.Count - 1, new SelectionRange(startSelection.Left, Math.Max(0, startSelection.Top - pageSize), startSelection.Right, startSelection.Bottom));
+                                this.Selection = this.Selection.SetItem(this.Selection.Count - 1, new SelectionRange(startSelection.Left, ContentTable.MoveVisibleRows(startSelection.Top, -pageSize), startSelection.Right, startSelection.Bottom));
                             }
                         }
                         else if (e.KeyModifiers == KeyModifiers.Alt)
@@ -4710,6 +5023,65 @@ namespace Spreadalonia
             Left = left;
             Top = top;
             LinkPara = linkPara;
+        }
+    }
+
+    /// <summary>
+    /// <see cref="EventArgs"/> for the <see cref="Spreadsheet.CellEditEnded"/> event.
+    /// </summary>
+    public class CellEditEndedEventArgs : EventArgs
+    {
+        /// <summary>
+        /// The column of the cell that was edited.
+        /// </summary>
+        public int Column { get; }
+
+        /// <summary>
+        /// The row of the cell that was edited.
+        /// </summary>
+        public int Row { get; }
+
+        /// <summary>
+        /// The content of the cell before the edit (may be <see langword="null"/>).
+        /// </summary>
+        public string OldText { get; }
+
+        /// <summary>
+        /// The content of the cell after the edit. When <see cref="Cancelled"/> is
+        /// <see langword="true"/> this is the text that was rejected or abandoned.
+        /// </summary>
+        public string NewText { get; }
+
+        /// <summary>
+        /// Whether the edit was cancelled (Escape, or an input rejected by a
+        /// <see cref="NumericCell"/>).
+        /// </summary>
+        public bool Cancelled { get; }
+
+        /// <summary>
+        /// Whether the edit was rejected by the validation of a <see cref="NumericCell"/> (as
+        /// opposed to being abandoned with Escape).
+        /// </summary>
+        public bool Rejected { get; }
+
+        internal CellEditEndedEventArgs(int column, int row, string oldText, string newText, bool cancelled) : base()
+        {
+            Column = column;
+            Row = row;
+            OldText = oldText;
+            NewText = newText;
+            Cancelled = cancelled;
+            Rejected = false;
+        }
+
+        internal CellEditEndedEventArgs(int column, int row, string oldText, string newText, bool cancelled, bool rejected) : base()
+        {
+            Column = column;
+            Row = row;
+            OldText = oldText;
+            NewText = newText;
+            Cancelled = cancelled;
+            Rejected = rejected;
         }
     }
 }

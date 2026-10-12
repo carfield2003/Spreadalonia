@@ -675,6 +675,13 @@ namespace Spreadalonia
 
                 for (int y = 0; y <= height; y++)
                 {
+                    // Hidden (collapsed) rows have a height of zero: their number is not drawn, so
+                    // the remaining row numbers stay contiguous.
+                    if (Owner.IsRowHidden(y + top))
+                    {
+                        continue;
+                    }
+
                     string txt = (y + top + 1).ToString();
 
                     double realY = y == 0 ? 0 : ys[y - 1];

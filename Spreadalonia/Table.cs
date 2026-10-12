@@ -178,6 +178,40 @@ namespace Spreadalonia
         /// </summary>
         public Dictionary<(int, int), LinkCell> LinkCells { get; internal set; } = new Dictionary<(int, int), LinkCell>();
 
+        /// <summary>
+        /// The account-tree cells, indexed by (column, row). A tree cell renders an indented
+        /// caption with dotted guide lines and a +/- toggle box; clicking the box raises the
+        /// <see cref="Spreadsheet.TreeExpand"/> event and (in automatic mode) collapses or expands
+        /// the rows below.
+        /// </summary>
+        public Dictionary<(int, int), TreeGradeCell> TreeCells { get; internal set; } = new Dictionary<(int, int), TreeGradeCell>();
+
+        /// <summary>
+        /// The numeric cells, indexed by (column, row). A numeric cell renders its raw content
+        /// formatted with thousand separators and a fixed number of decimal digits, and only
+        /// accepts numeric input while editing.
+        /// </summary>
+        public Dictionary<(int, int), NumericCell> NumericCells { get; internal set; } = new Dictionary<(int, int), NumericCell>();
+
+        /// <summary>
+        /// The rows that are currently hidden (collapsed). While a row is hidden its height is
+        /// zero, so it disappears from the sheet without renumbering the remaining rows.
+        /// </summary>
+        public HashSet<int> HiddenRows { get; } = new HashSet<int>();
+
+        /// <summary>
+        /// The ranges that are read-only. Cells inside a read-only range cannot be edited, pasted
+        /// into or cleared, but they can still be selected and copied.
+        /// </summary>
+        public List<SelectionRange> ReadonlyRanges { get; } = new List<SelectionRange>();
+
+        /// <summary>
+        /// Whether the table maintains <see cref="HiddenRows"/> itself when a <see cref="TreeGradeCell"/>
+        /// toggle box is clicked. When this is <see langword="false"/> the <see cref="Spreadsheet.TreeExpand"/>
+        /// event is raised but the host is responsible for calling <see cref="SetRowVisible"/>.
+        /// </summary>
+        public bool AutoManageRows { get; set; } = true;
+
         private List<CellBackground> _cellBackgrounds = new List<CellBackground>();
 
         /// <summary>
@@ -360,7 +394,7 @@ namespace Spreadalonia
             int topIndex = 0;
             double currHeight = 0;
 
-            while (currHeight < y)
+            while (currHeight < y && topIndex < MaxTableHeight)
             {
                 currHeight += GetHeight(topIndex);
                 topIndex++;
@@ -406,7 +440,10 @@ namespace Spreadalonia
             double topDelta = -y;
 
             double nextHeight = GetHeight(topIndex);
-            while (currHeight + nextHeight < y)
+
+            // Hidden rows have a height of zero, so currHeight does not advance for them; the
+            // MaxTableHeight guard makes sure the loop can never run away.
+            while (currHeight + nextHeight < y && topIndex < MaxTableHeight)
             {
                 currHeight += nextHeight;
                 topDelta = currHeight - y;
@@ -451,6 +488,14 @@ namespace Spreadalonia
 
         internal double GetHeight(int rowIndex)
         {
+            // Hidden (collapsed) rows have a height of zero: they keep their index, so all the
+            // existing row-indexed dictionaries stay valid, but they occupy no vertical space and
+            // are skipped by the hit testing code (their interval in lastDrawnYs is empty).
+            if (IsRowHidden(rowIndex))
+            {
+                return 0;
+            }
+
             if (!RowHeights.TryGetValue(rowIndex, out double h))
             {
                 return DefaultRowHeight;
@@ -506,6 +551,401 @@ namespace Spreadalonia
             }
 
             return new Rect(currX, currY, GetWidth(x), GetHeight(y));
+        }
+
+        /// <summary>
+        /// Checks whether the specified row is currently hidden (collapsed).
+        /// </summary>
+        /// <param name="row">The row index.</param>
+        /// <returns><see langword="true"/> if the row is hidden.</returns>
+        public bool IsRowHidden(int row)
+        {
+            return HiddenRows != null && HiddenRows.Contains(row);
+        }
+
+        /// <summary>
+        /// Checks whether the specified row is currently visible (not collapsed).
+        /// </summary>
+        /// <param name="row">The row index.</param>
+        /// <returns><see langword="true"/> if the row is visible.</returns>
+        public bool IsRowVisible(int row)
+        {
+            return !IsRowHidden(row);
+        }
+
+        /// <summary>
+        /// Shows or hides a row.
+        /// </summary>
+        /// <param name="row">The row index.</param>
+        /// <param name="visible"><see langword="true"/> to show the row, <see langword="false"/> to hide it.</param>
+        public void SetRowVisible(int row, bool visible)
+        {
+            if (visible)
+            {
+                if (HiddenRows.Remove(row))
+                {
+                    InvalidateTreeCache();
+                    this.InvalidateVisual();
+                }
+            }
+            else
+            {
+                if (HiddenRows.Add(row))
+                {
+                    InvalidateTreeCache();
+                    this.InvalidateVisual();
+                }
+            }
+        }
+
+        /// <summary>
+        /// Shows or hides a set of rows.
+        /// </summary>
+        /// <param name="rows">The row indices.</param>
+        /// <param name="visible"><see langword="true"/> to show the rows, <see langword="false"/> to hide them.</param>
+        public void SetRowsVisible(IEnumerable<int> rows, bool visible)
+        {
+            if (rows == null)
+            {
+                return;
+            }
+
+            foreach (int row in rows)
+            {
+                if (visible)
+                {
+                    HiddenRows.Remove(row);
+                }
+                else
+                {
+                    HiddenRows.Add(row);
+                }
+            }
+
+            InvalidateTreeCache();
+            this.InvalidateVisual();
+        }
+
+        /// <summary>
+        /// Removes every entry from <see cref="HiddenRows"/>, showing all rows again.
+        /// </summary>
+        public void ShowAllRows()
+        {
+            if (HiddenRows.Count > 0)
+            {
+                HiddenRows.Clear();
+                InvalidateTreeCache();
+                this.InvalidateVisual();
+            }
+        }
+
+        /// <summary>
+        /// Returns the highest row index that is referenced by the cell data, the tree cells or the
+        /// row heights. Used to bound the search performed by <see cref="NextVisibleRow"/>.
+        /// </summary>
+        internal int GetLastUsedRow()
+        {
+            int max = -1;
+
+            foreach (KeyValuePair<(int, int), string> kvp in Data)
+            {
+                if (kvp.Key.Item2 > max)
+                {
+                    max = kvp.Key.Item2;
+                }
+            }
+
+            if (TreeCells != null)
+            {
+                foreach (KeyValuePair<(int, int), TreeGradeCell> kvp in TreeCells)
+                {
+                    if (kvp.Key.Item2 > max)
+                    {
+                        max = kvp.Key.Item2;
+                    }
+                }
+            }
+
+            if (RowHeights != null)
+            {
+                foreach (KeyValuePair<int, double> kvp in RowHeights)
+                {
+                    if (kvp.Key > max)
+                    {
+                        max = kvp.Key;
+                    }
+                }
+            }
+
+            return max;
+        }
+
+        /// <summary>
+        /// Returns the next row that is not hidden, starting from <paramref name="row"/> and moving
+        /// in the specified direction. Returns <paramref name="row"/> itself when there is no such
+        /// row, so that keyboard navigation never lands on an invisible cell.
+        /// </summary>
+        /// <param name="row">The row to start from (exclusive).</param>
+        /// <param name="direction">+1 to search downwards, -1 to search upwards.</param>
+        /// <returns>The next visible row, or <paramref name="row"/> when there is none.</returns>
+        public int NextVisibleRow(int row, int direction)
+        {
+            int step = direction >= 0 ? 1 : -1;
+            int limit = Math.Min(MaxTableHeight, GetLastUsedRow() + 1);
+            int candidate = row + step;
+
+            while (candidate >= 0 && candidate <= limit)
+            {
+                if (IsRowVisible(candidate))
+                {
+                    return candidate;
+                }
+
+                candidate += step;
+            }
+
+            return row;
+        }
+
+        /// <summary>
+        /// Moves <paramref name="count"/> visible rows away from <paramref name="row"/>, skipping
+        /// every hidden row on the way.
+        /// </summary>
+        /// <param name="row">The row to start from.</param>
+        /// <param name="count">The number of visible rows to move (negative to move upwards).</param>
+        /// <returns>The row reached, or the last visible row when the end of the sheet is hit.</returns>
+        public int MoveVisibleRows(int row, int count)
+        {
+            int step = count >= 0 ? 1 : -1;
+            int total = Math.Abs(count);
+            int current = row;
+
+            for (int i = 0; i < total; i++)
+            {
+                int next = NextVisibleRow(current, step);
+
+                if (next == current)
+                {
+                    break;
+                }
+
+                current = next;
+            }
+
+            return current;
+        }
+
+        /// <summary>
+        /// Checks whether a cell is part of one of the <see cref="ReadonlyRanges"/>.
+        /// </summary>
+        /// <param name="column">The column of the cell.</param>
+        /// <param name="row">The row of the cell.</param>
+        /// <returns><see langword="true"/> if the cell cannot be edited.</returns>
+        public bool IsCellReadonly(int column, int row)
+        {
+            if (ReadonlyRanges == null || ReadonlyRanges.Count == 0)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < ReadonlyRanges.Count; i++)
+            {
+                if (ReadonlyRanges[i] != null && ReadonlyRanges[i].Contains(column, row))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Marks a range as read-only. Read-only cells cannot be edited, pasted into or cleared,
+        /// but they can still be selected and copied.
+        /// </summary>
+        /// <param name="range">The range to protect.</param>
+        /// <param name="readOnly"><see langword="true"/> to make the range read-only, <see langword="false"/> to make it editable again.</param>
+        public void SetRangeReadonly(SelectionRange range, bool readOnly)
+        {
+            if (readOnly)
+            {
+                for (int i = 0; i < ReadonlyRanges.Count; i++)
+                {
+                    if (ReadonlyRanges[i].Equals(range))
+                    {
+                        return;
+                    }
+                }
+
+                ReadonlyRanges.Add(range);
+            }
+            else
+            {
+                for (int i = ReadonlyRanges.Count - 1; i >= 0; i--)
+                {
+                    if (ReadonlyRanges[i].Equals(range))
+                    {
+                        ReadonlyRanges.RemoveAt(i);
+                    }
+                }
+            }
+
+            this.InvalidateVisual();
+        }
+
+        /// <summary>
+        /// Removes every entry from <see cref="ReadonlyRanges"/>.
+        /// </summary>
+        public void ClearReadonlyRanges()
+        {
+            if (ReadonlyRanges.Count > 0)
+            {
+                ReadonlyRanges.Clear();
+                this.InvalidateVisual();
+            }
+        }
+
+        private Dictionary<(int, int), bool> ancestorSiblingCache = new Dictionary<(int, int), bool>();
+
+        /// <summary>
+        /// Discards the cached "does another node of this level follow?" answers used to draw the
+        /// dotted guide lines of <see cref="TreeGradeCell"/>s.
+        /// </summary>
+        internal void InvalidateTreeCache()
+        {
+            ancestorSiblingCache.Clear();
+        }
+
+        /// <summary>
+        /// Determines whether the guide line of the specified level continues below
+        /// <paramref name="row"/>, i.e. whether a further direct child (a visible row at level
+        /// <paramref name="level"/> + 1) follows within the subtree. The answer is used to decide
+        /// whether a guide line is drawn full height, turns into a corner in the middle of the
+        /// row, or is not drawn at all.
+        /// </summary>
+        /// <param name="row">The row of the node.</param>
+        /// <param name="level">The guide-line (ancestor) level to test.</param>
+        /// <returns><see langword="true"/> when a later visible row sits at exactly level <paramref name="level"/> + 1.</returns>
+        internal bool HasNextSiblingAtLevel(int row, int level)
+        {
+            (int, int) key = (row, level);
+
+            if (ancestorSiblingCache.TryGetValue(key, out bool cached))
+            {
+                return cached;
+            }
+
+            bool result = false;
+            int limit = Math.Min(MaxTableHeight, GetLastUsedRow() + 1);
+            int childLevel = level + 1;
+
+            for (int r = row + 1; r <= limit; r++)
+            {
+                // Hidden rows have zero height; they can neither continue nor terminate a
+                // visible guide line.
+                if (IsRowHidden(r))
+                {
+                    continue;
+                }
+
+                if (!TreeCells.TryGetValue((TreeColumn(r), r), out TreeGradeCell cell) || cell == null)
+                {
+                    break;
+                }
+
+                if (cell.Level == childLevel)
+                {
+                    result = true;
+                    break;
+                }
+
+                if (cell.Level <= level)
+                {
+                    // The subtree of the level-"level" ancestor has ended.
+                    break;
+                }
+
+                // Deeper rows (grandchildren and below) neither continue nor terminate the
+                // level-"level" guide line; a direct child may still follow further down.
+            }
+
+            ancestorSiblingCache[key] = result;
+            return result;
+        }
+
+        /// <summary>
+        /// Returns the column that holds the <see cref="TreeGradeCell"/> of the specified row, or 0
+        /// when the row has no tree cell.
+        /// </summary>
+        /// <param name="row">The row index.</param>
+        /// <returns>The column of the tree cell, or 0.</returns>
+        internal int TreeColumn(int row)
+        {
+            for (int c = 0; c < 8; c++)
+            {
+                if (TreeCells.ContainsKey((c, row)))
+                {
+                    return c;
+                }
+            }
+
+            return 0;
+        }
+
+        /// <summary>
+        /// Applies the collapse / expand rules of the account tree to <see cref="HiddenRows"/>.
+        /// Collapsing a row hides every following row whose level is greater than the level of the
+        /// clicked row; expanding restores each sub-group to its own expansion state.
+        /// </summary>
+        /// <param name="row">The row that was toggled.</param>
+        /// <param name="expanded">The new expansion state of the row.</param>
+        internal void ApplyTreeExpansion(int row, bool expanded)
+        {
+            if (TreeCells == null || !TreeCells.TryGetValue((TreeColumn(row), row), out TreeGradeCell cell) || cell == null)
+            {
+                return;
+            }
+
+            int level = cell.Level;
+            int limit = Math.Min(MaxTableHeight, GetLastUsedRow() + 1);
+
+            if (!expanded)
+            {
+                for (int r = row + 1; r <= limit; r++)
+                {
+                    if (!TreeCells.TryGetValue((TreeColumn(r), r), out TreeGradeCell child) || child == null || child.Level <= level)
+                    {
+                        break;
+                    }
+
+                    HiddenRows.Add(r);
+                }
+            }
+            else
+            {
+                bool childExpanded = true;
+
+                for (int r = row + 1; r <= limit; r++)
+                {
+                    if (!TreeCells.TryGetValue((TreeColumn(r), r), out TreeGradeCell child) || child == null || child.Level <= level)
+                    {
+                        break;
+                    }
+
+                    if (child.Level == level + 1)
+                    {
+                        HiddenRows.Remove(r);
+                        childExpanded = child.IsExpanded;
+                    }
+                    else if (childExpanded)
+                    {
+                        HiddenRows.Remove(r);
+                    }
+                }
+            }
+
+            InvalidateTreeCache();
+            this.InvalidateVisual();
         }
 
         protected override void OnKeyDown(KeyEventArgs e)
@@ -582,6 +1022,13 @@ namespace Spreadalonia
 
             if (!currentPoint.Properties.IsLeftButtonPressed && !currentPoint.Properties.IsRightButtonPressed)
             {
+                // Hovering over the +/- box of a tree cell shows a hand cursor.
+                if (TryHitTreeBox(xPos, yPos, out TreeGradeCell hoveredTree, out _))
+                {
+                    this.Cursor = HandCursor;
+                    return;
+                }
+
                 // Hovering over a link cell shows a hand cursor.
                 if (TryHitLinkCell(xPos, yPos, out LinkCell hoveredLink, out _))
                 {
@@ -1042,7 +1489,7 @@ namespace Spreadalonia
                 {
                     if (selectionMoveDelta.Item2 > 0)
                     {
-                        this.Data.FillBottom(selectionBeingMoved, selectionMoveDelta.Item2, this.Container.UndoStack);
+                        this.Data.FillBottom(selectionBeingMoved, selectionMoveDelta.Item2, this.Container.UndoStack, HiddenRows.Count > 0 ? HiddenRows : null);
                         this.Container.PushNonDataStackNull();
                         this.Container.ClearRedoStack();
                         this.Container.Selection = ImmutableList.Create(new SelectionRange(selectionBeingMoved.Left, selectionBeingMoved.Top, selectionBeingMoved.Right, selectionBeingMoved.Bottom + selectionMoveDelta.Item2));
@@ -1058,7 +1505,7 @@ namespace Spreadalonia
                     }
                     else
                     {
-                        this.Data.FillTop(selectionBeingMoved, -selectionBeingMoved.Height - selectionMoveDelta.Item2 + 1, this.Container.UndoStack);
+                        this.Data.FillTop(selectionBeingMoved, -selectionBeingMoved.Height - selectionMoveDelta.Item2 + 1, this.Container.UndoStack, HiddenRows.Count > 0 ? HiddenRows : null);
                         this.Container.PushNonDataStackNull();
                         this.Container.ClearRedoStack();
                         this.Container.Selection = ImmutableList.Create(new SelectionRange(selectionBeingMoved.Left, selectionBeingMoved.Top + selectionMoveDelta.Item2 + selectionBeingMoved.Height - 1, selectionBeingMoved.Right, selectionBeingMoved.Bottom));
@@ -1110,6 +1557,62 @@ namespace Spreadalonia
             }
 
             return false;
+        }
+
+        /// <summary>
+        /// Returns the <see cref="TreeGradeCell"/> whose +/- box contains the given pointer
+        /// position. The hit rectangles are updated every time the table is drawn, so only visible
+        /// tree cells can be hit.
+        /// </summary>
+        private bool TryHitTreeBox(double xPos, double yPos, out TreeGradeCell treeCell, out (int, int) key)
+        {
+            treeCell = null;
+            key = (-1, -1);
+
+            if (this.TreeCells == null || this.TreeCells.Count == 0)
+            {
+                return false;
+            }
+
+            Point p = new Point(xPos, yPos);
+
+            foreach (KeyValuePair<(int, int), TreeGradeCell> kvp in this.TreeCells)
+            {
+                if (kvp.Value != null && kvp.Value.HasBox && kvp.Value.BoxHitRect.Contains(p))
+                {
+                    treeCell = kvp.Value;
+                    key = kvp.Key;
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Toggles a tree cell: flips its <see cref="TreeGradeCell.IsExpanded"/> flag, applies the
+        /// collapse / expand rules when <see cref="AutoManageRows"/> is set, and raises the
+        /// <see cref="Spreadsheet.TreeExpand"/> event.
+        /// </summary>
+        /// <param name="column">The column of the tree cell.</param>
+        /// <param name="row">The row of the tree cell.</param>
+        /// <param name="cell">The tree cell to toggle.</param>
+        internal void ToggleTreeCell(int column, int row, TreeGradeCell cell)
+        {
+            if (cell == null)
+            {
+                return;
+            }
+
+            cell.IsExpanded = !cell.IsExpanded;
+
+            if (AutoManageRows)
+            {
+                ApplyTreeExpansion(row, cell.IsExpanded);
+            }
+
+            this.Container?.RaiseTreeExpand(column, row, cell, cell.IsExpanded);
+            this.InvalidateVisual();
         }
 
         protected override void OnPointerPressed(PointerPressedEventArgs e)
@@ -1268,6 +1771,15 @@ namespace Spreadalonia
 
                 if (currentPoint.Properties.IsLeftButtonPressed && e.ClickCount == 1)
                 {
+                    // Clicking the +/- box of a tree cell collapses / expands the node instead of
+                    // starting a selection or an edit.
+                    if (TryHitTreeBox(xPos, yPos, out TreeGradeCell pressedTree, out (int, int) pressedTreeKey))
+                    {
+                        ToggleTreeCell(pressedTreeKey.Item1, pressedTreeKey.Item2, pressedTree);
+                        pointerPressedAction = 0;
+                        return;
+                    }
+
                     // Pressing inside a link text area starts a link click (activated on release).
                     if (TryHitLinkCell(xPos, yPos, out LinkCell pressedLink, out (int, int) pressedLinkKey))
                     {
@@ -1372,6 +1884,13 @@ namespace Spreadalonia
                 else if (currentPoint.Properties.IsLeftButtonPressed && e.ClickCount == 2)
                 {
                     (int, int) cell = (x + lastDrawnLeft, y + lastDrawnTop);
+
+                    // Double clicking the +/- box must not start an edit either.
+                    if (TryHitTreeBox(xPos, yPos, out TreeGradeCell doubleClickedTree, out (int, int) doubleClickedTreeKey))
+                    {
+                        pointerPressedAction = 0;
+                        return;
+                    }
 
                     Color? clickedColor = null;
 
@@ -1595,17 +2114,63 @@ namespace Spreadalonia
 
                         for (int y = 0; y <= height; y++)
                         {
+                            // Hidden (collapsed) rows have a height of zero; nothing of theirs is drawn.
+                            if (IsRowHidden(top + y))
+                            {
+                                continue;
+                            }
+
                             for (int x = 0; x <= width; x++)
                             {
-                                if (Data.TryGetValue((left + x, top + y), out string txt))
+                                bool hasData = Data.TryGetValue((left + x, top + y), out string txt);
+                                bool hasTreeCell = TreeCells.TryGetValue((left + x, top + y), out TreeGradeCell treeCell) && treeCell != null;
+                                bool hasNumericCell = NumericCells.TryGetValue((left + x, top + y), out NumericCell numericCellPlaceholder) && numericCellPlaceholder != null;
+
+                                if (!hasData && !hasTreeCell && !hasNumericCell)
+                                {
+                                    continue;
+                                }
+
+                                // Tree cells draw their own content (guide lines, +/- box and caption).
+                                if (hasTreeCell && (!Container.IsEditing || left + x != Container.EditingCell.Item1 || top + y != Container.EditingCell.Item2))
+                                {
+                                    double treeX = x == 0 ? 0 : xs[x - 1];
+                                    double treeY = y == 0 ? 0 : ys[y - 1];
+
+                                    if (!CellTypefaces.TryGetValue((left + x, top + y), out Typeface treeFace) &&
+                                        !RowTypefaces.TryGetValue(top + y, out treeFace) &&
+                                        !ColumnTypefaces.TryGetValue(left + x, out treeFace))
+                                    {
+                                        treeFace = defaultTypeFace;
+                                    }
+
+                                    double treeFontSize = this.FontSize;
+                                    if (CellFontSize.TryGetValue((left + x, top + y), out double customTreeFontSize))
+                                    {
+                                        treeFontSize = customTreeFontSize;
+                                    }
+
+                                    int treeRow = top + y;
+                                    treeCell.Render(context, new Rect(treeX, treeY, xs[x] - treeX, ys[y] - treeY), xs[width], this, treeFace, treeFontSize, this.Foreground, lvl => HasNextSiblingAtLevel(treeRow, lvl));
+                                }
+
+                                if (hasData)
                                 {
                                     if (mergedCells != null && mergedCells.Contains((left + x, top + y)))
                                     {
                                         continue;
                                     }
 
+
                                     if (!Container.IsEditing || left + x != Container.EditingCell.Item1 || top + y != Container.EditingCell.Item2)
                                     {
+                                        // A tree cell draws its own caption; the raw text must not be
+                                        // drawn on top of it.
+                                        if (hasTreeCell)
+                                        {
+                                            continue;
+                                        }
+
                                         // Title cells render their own content and override the default text drawing.
                                         if (TitleCells.TryGetValue((left + x, top + y), out TitleCell titleCell))
                                         {
@@ -1656,12 +2221,21 @@ namespace Spreadalonia
                                             continue;
                                         }
 
-                                        // Determine display text: use formula result if available, otherwise raw text
+                                        // Determine display text: numeric cells are formatted, then
+                                        // formula results, then the raw text.
                                         string displayText = txt;
-                                        if (FormulaCells != null && FormulaCells.TryGetValue((left + x, top + y), out CellData formulaCell))
+                                        NumericCell activeNumericCell = null;
+
+                                        if (NumericCells.TryGetValue((left + x, top + y), out NumericCell numericCell) && numericCell != null)
+                                        {
+                                            activeNumericCell = numericCell;
+                                            displayText = numericCell.GetDisplayText(txt);
+                                        }
+                                        else if (FormulaCells != null && FormulaCells.TryGetValue((left + x, top + y), out CellData formulaCell))
                                         {
                                             displayText = formulaCell.DisplayText;
                                         }
+
 
                                         if (!CellTypefaces.TryGetValue((left + x, top + y), out Typeface face) &&
                                             !RowTypefaces.TryGetValue(top + y, out face) &&
@@ -1680,6 +2254,17 @@ namespace Spreadalonia
                                         if (!CellTextAlignment.TryGetValue((left + x, top + y), out TextAlignment hor))
                                         {
                                             hor = this.DefaultTextAlignment;
+                                        }
+
+                                        if (activeNumericCell != null)
+                                        {
+                                            // Numeric values are always right aligned, like the WPF reference.
+                                            hor = TextAlignment.Right;
+
+                                            if (activeNumericCell.NegativeRed && activeNumericCell.IsNegative(txt))
+                                            {
+                                                brs = activeNumericCell.NegativeBrush ?? new SolidColorBrush(Colors.Red);
+                                            }
                                         }
 
                                         if (!CellVerticalAlignment.TryGetValue((left + x, top + y), out VerticalAlignment ver))
@@ -1748,6 +2333,12 @@ namespace Spreadalonia
                                                 realX = xs[x] - margin.Right - textWidth;
                                             }
 
+
+                                            if (activeNumericCell != null && activeNumericCell.Strikethrough && textWidth > 0)
+                                            {
+                                                double strikeY = realY + fmtText.Height * 0.5;
+                                                context.DrawLine(new Pen(activeNumericCell.StrikethroughBrush ?? new SolidColorBrush(Colors.Red), 2), new Point(realX, strikeY), new Point(realX + textWidth, strikeY));
+                                            }
 
                                             if (colourBrush == null)
                                             {

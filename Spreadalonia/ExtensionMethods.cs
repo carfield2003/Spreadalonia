@@ -2595,7 +2595,7 @@ namespace Spreadalonia
             }
         }
 
-        public static void FillBottom(this Dictionary<(int, int), string> data, SelectionRange range, int howMany, Stack<StackFrame<(int, int), string>> undoStack)
+        public static void FillBottom(this Dictionary<(int, int), string> data, SelectionRange range, int howMany, Stack<StackFrame<(int, int), string>> undoStack, HashSet<int> skipRows = null)
         {
             Dictionary<(int, int), string> previousData = new Dictionary<(int, int), string>();
             Dictionary<(int, int), string> newData = new Dictionary<(int, int), string>();
@@ -2620,7 +2620,7 @@ namespace Spreadalonia
 
             for (int i = range.Left; i <= range.Right; i++)
             {
-                data.FillBottom(range.Top, range.Bottom, i, howMany);
+                data.FillBottom(range.Top, range.Bottom, i, howMany, skipRows);
             }
 
             if (undoStack != null)
@@ -2693,7 +2693,7 @@ namespace Spreadalonia
             }
         }
 
-        public static void FillTop(this Dictionary<(int, int), string> data, SelectionRange range, int howMany, Stack<StackFrame<(int, int), string>> undoStack)
+        public static void FillTop(this Dictionary<(int, int), string> data, SelectionRange range, int howMany, Stack<StackFrame<(int, int), string>> undoStack, HashSet<int> skipRows = null)
         {
             Dictionary<(int, int), string> previousData = new Dictionary<(int, int), string>();
             Dictionary<(int, int), string> newData = new Dictionary<(int, int), string>();
@@ -2718,7 +2718,7 @@ namespace Spreadalonia
 
             for (int i = range.Left; i <= range.Right; i++)
             {
-                data.FillTop(range.Top, range.Bottom, i, howMany);
+                data.FillTop(range.Top, range.Bottom, i, howMany, skipRows);
             }
 
             if (undoStack != null)
@@ -2793,7 +2793,7 @@ namespace Spreadalonia
             return fillValue(howMany);
         }
 
-        private static void FillBottom(this Dictionary<(int, int), string> data, int top, int bottom, int x, int howMany)
+        private static void FillBottom(this Dictionary<(int, int), string> data, int top, int bottom, int x, int howMany, HashSet<int> skipRows = null)
         {
             string[] values = new string[bottom - top + 1];
 
@@ -2809,6 +2809,11 @@ namespace Spreadalonia
 
             for (int i = 0; i < howMany; i++)
             {
+                if (skipRows != null && skipRows.Contains(bottom + i + 1))
+                {
+                    continue;
+                }
+
                 string val = fillValue(i + 1);
 
                 if (!string.IsNullOrEmpty(val))
@@ -2895,7 +2900,7 @@ namespace Spreadalonia
             return fillValue(howMany);
         }
 
-        private static void FillTop(this Dictionary<(int, int), string> data, int top, int bottom, int x, int howMany)
+        private static void FillTop(this Dictionary<(int, int), string> data, int top, int bottom, int x, int howMany, HashSet<int> skipRows = null)
         {
             string[] values = new string[bottom - top + 1];
 
@@ -2911,6 +2916,11 @@ namespace Spreadalonia
 
             for (int i = 0; i < howMany; i++)
             {
+                if (skipRows != null && skipRows.Contains(top - i - 1))
+                {
+                    continue;
+                }
+
                 string val = fillValue(i + 1);
 
                 if (!string.IsNullOrEmpty(val))

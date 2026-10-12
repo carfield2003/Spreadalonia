@@ -56,6 +56,14 @@ namespace Spreadalonia
         public ISet<string> AdditionalExcelFunctions { get; set; } = null;
 
         /// <summary>
+        /// Whether rows that are collapsed in the control (<see cref="Table.HiddenRows"/>) are
+        /// written to the worksheet as normal, visible rows. <see langword="false"/> by default:
+        /// collapsed rows are hidden in Excel and their content is not written, matching what the
+        /// user sees on screen.
+        /// </summary>
+        public bool ExportHiddenRows { get; set; } = false;
+
+        /// <summary>
         /// An optional callback invoked with a human readable warning when a cell is exported
         /// with its cached value instead of its formula (e.g. because it uses a custom function
         /// that Excel does not know, or a single-quoted string literal).
@@ -210,9 +218,16 @@ namespace Spreadalonia
                     }
                 }
 
-                // Row heights (DIP pixels -> Excel points).
+                // Row heights (DIP pixels -> Excel points) and collapsed rows.
+                bool exportHidden = options != null && options.ExportHiddenRows;
+
                 for (int r = 0; r <= maxRow; r++)
                 {
+                    if (table.IsRowHidden(r))
+                    {
+                        sheet.Row(r + 1).Hide();
+                    }
+
                     double pt = table.GetHeight(r) * 0.75;
                     if (pt > 0)
                     {
@@ -244,6 +259,12 @@ namespace Spreadalonia
                 // Write cell content.
                 for (int r = 0; r <= maxRow; r++)
                 {
+                    // Collapsed rows are not written unless ExportHiddenRows is set.
+                    if (!exportHidden && table.IsRowHidden(r))
+                    {
+                        continue;
+                    }
+
                     for (int c = 0; c <= maxCol; c++)
                     {
                         if (mergedInnerCells.Contains((c, r)))
@@ -274,10 +295,35 @@ namespace Spreadalonia
                             continue;
                         }
 
-                        // 4. Plain data cells.
+                        // 4. Plain data cells (numeric cells are written as real Excel numbers).
                         if (table.Data != null && table.Data.TryGetValue((c, r), out string rawText) && !string.IsNullOrEmpty(rawText))
                         {
-                            WriteValueCell(cell, rawText, table, c, r, defaultTypeface, defaultForeground);
+                            NumericCell numericCell = null;
+                            bool isNumeric = table.NumericCells != null && table.NumericCells.TryGetValue((c, r), out numericCell) && numericCell != null;
+
+                            if (isNumeric && NumberFormatter.TryParse(rawText, out decimal numericValue))
+                            {
+                                cell.Value = numericValue;
+                                cell.Style.NumberFormat.Format = numericCell.Digits > 0
+                                    ? "#,##0." + new string('0', numericCell.Digits)
+                                    : "#,##0";
+                                cell.Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Right;
+
+                                if (numericCell.NegativeRed && numericValue < 0)
+                                {
+                                    cell.Style.Font.FontColor = XLColor.Red;
+                                }
+
+                                if (numericCell.Strikethrough)
+                                {
+                                    cell.Style.Font.Strikethrough = true;
+                                    cell.Style.Font.FontColor = XLColor.Red;
+                                }
+                            }
+                            else
+                            {
+                                WriteValueCell(cell, rawText, table, c, r, defaultTypeface, defaultForeground);
+                            }
                         }
                     }
                 }

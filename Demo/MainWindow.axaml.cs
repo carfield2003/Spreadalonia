@@ -27,6 +27,9 @@ namespace Demo
                 Console.WriteLine($"[LinkClick] cell ({e.Left}, {e.Top}) -> {e.LinkPara}");
             };
 
+            // Tree / numeric cell demo events (TreeExpand, InvalidInput, CellEditEnded).
+            WireTreeCellEvents();
+
             // Automated screenshot test for the TitleCell demo.
             if (Environment.GetCommandLineArgs().Any(a => a == "--title-cell-test"))
             {
@@ -63,6 +66,36 @@ namespace Demo
                         await System.Threading.Tasks.Task.Delay(800);
                         SaveScreenshot(@"C:\Users\89664\Desktop\link_cell_test.png");
                         Console.WriteLine("[Test] LinkCell screenshot saved.");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine("[Test] EXCEPTION: " + ex);
+                    }
+                    finally
+                    {
+                        Environment.Exit(0);
+                    }
+                };
+            }
+
+            // Automated screenshot test for the TreeGradeCell / NumericCell demo.
+            if (Environment.GetCommandLineArgs().Any(a => a == "--tree-cell-test"))
+            {
+                Opened += async (_, _) =>
+                {
+                    try
+                    {
+                        await System.Threading.Tasks.Task.Delay(500);
+                        TreeCellButton_Click(null!, null!);
+                        await System.Threading.Tasks.Task.Delay(800);
+                        SaveScreenshot(@"C:\Users\89664\Desktop\tree_cell_test.png");
+                        Console.WriteLine("[Test] TreeCell screenshot saved.");
+
+                        // Collapse the first level-1 node and shoot again.
+                        SpreadsheetControl.ToggleTreeCell(0, 1);
+                        await System.Threading.Tasks.Task.Delay(500);
+                        SaveScreenshot(@"C:\Users\89664\Desktop\tree_cell_collapsed.png");
+                        Console.WriteLine("[Test] TreeCell collapsed screenshot saved.");
                     }
                     catch (Exception ex)
                     {
@@ -645,6 +678,303 @@ namespace Demo
             SpreadsheetControl.CellVerticalAlignment[(1, 4)] = VerticalAlignment.Center;
 
             SpreadsheetControl.Refresh();
+        }
+
+        // Parent row of every tree node, used by the demo to roll leaf amounts up.
+        private readonly Dictionary<int, int> treeParentRow = new Dictionary<int, int>();
+
+        // The leaf rows that belong to each level-1 group.
+        private readonly Dictionary<int, List<int>> groupLeaves = new Dictionary<int, List<int>>();
+
+        /// <summary>
+        /// Builds an "opening balances" sheet: a three level account tree in column 0, numeric
+        /// amount columns, read-only derived columns and live recalculation through
+        /// <see cref="Spreadsheet.CellEditEnded"/>.
+        /// </summary>
+        private void TreeCellButton_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+        {
+            // Clear formatting features and reset the table bounds
+            SpreadsheetControl.MergedRanges = null;
+            SpreadsheetControl.CellBackgrounds = null;
+            SpreadsheetControl.CellBorders = null;
+            SpreadsheetControl.MaxTableWidth = int.MaxValue - 2;
+            SpreadsheetControl.MaxTableHeight = int.MaxValue - 2;
+            SpreadsheetControl.CellFontSize?.Clear();
+            SpreadsheetControl.CellTypefaces?.Clear();
+            SpreadsheetControl.CellForeground?.Clear();
+            SpreadsheetControl.CellTextAlignment?.Clear();
+            SpreadsheetControl.CellVerticalAlignment?.Clear();
+            SpreadsheetControl.CellMargin?.Clear();
+            SpreadsheetControl.TitleCells?.Clear();
+            SpreadsheetControl.LinkCells?.Clear();
+            SpreadsheetControl.TreeCells?.Clear();
+            SpreadsheetControl.NumericCells?.Clear();
+            SpreadsheetControl.ClearContent();
+
+            treeParentRow.Clear();
+            groupLeaves.Clear();
+
+            IBrush parentBackground = new SolidColorBrush(Color.Parse("#D9FFF5"));
+            IBrush leafBackground = new SolidColorBrush(Color.Parse("#B9F5D8"));
+
+            string[] headers = { "科目编码", "科目名称", "金额", "期初借方", "期初贷方", "数量", "单价" };
+
+            var data = new Dictionary<(int, int), string>();
+
+            for (int c = 0; c < headers.Length; c++)
+            {
+                data[(c, 0)] = headers[c];
+                SpreadsheetControl.CellTypefaces[(c, 0)] = new Typeface(FontFamily.Default, FontStyle.Normal, FontWeight.Bold);
+                SpreadsheetControl.CellTextAlignment[(c, 0)] = TextAlignment.Center;
+            }
+
+            var heights = new Dictionary<int, double> { [0] = 28 };
+            var widths = new Dictionary<int, double>
+            {
+                [0] = 220,
+                [1] = 180,
+                [2] = 110,
+                [3] = 110,
+                [4] = 110,
+                [5] = 90,
+                [6] = 90,
+            };
+
+            int row = 1;
+            var leafRowsByGroup = new Dictionary<int, List<int>>();
+            int groupCount = 12;
+
+            // Even groups are three levels deep (L1 -> L2 -> leaves), odd groups four levels
+            // (L1 -> L2 -> L3 -> leaves), so both tree depths can be compared side by side.
+            for (int g = 0; g < groupCount; g++)
+            {
+                string groupCode = (1001 + g).ToString();
+                int groupRow = row;
+                bool deep = g % 2 == 1;
+
+                // Level 1
+                data[(0, groupRow)] = groupCode;
+                data[(1, groupRow)] = "一级科目 " + groupCode;
+                SpreadsheetControl.TreeCells[(0, groupRow)] = new TreeGradeCell(groupCode, 1, false)
+                {
+                    BackColor = parentBackground,
+                    IsExpanded = true
+                };
+                heights[groupRow] = 26;
+                row++;
+
+                leafRowsByGroup[groupRow] = new List<int>();
+
+                int subCount = deep ? 2 : 3;
+
+                for (int s = 0; s < subCount; s++)
+                {
+                    string subCode = groupCode + (s + 1).ToString("00");
+                    int subRow = row;
+
+                    data[(0, subRow)] = subCode;
+                    data[(1, subRow)] = "二级科目 " + subCode;
+                    SpreadsheetControl.TreeCells[(0, subRow)] = new TreeGradeCell(subCode, 2, false)
+                    {
+                        BackColor = parentBackground,
+                        IsExpanded = true
+                    };
+                    treeParentRow[subRow] = groupRow;
+                    heights[subRow] = 26;
+                    row++;
+
+                    if (deep)
+                    {
+                        // Four-level group: L2 -> L3 -> leaves.
+                        for (int t = 0; t < 2; t++)
+                        {
+                            string thirdCode = subCode + (t + 1).ToString("00");
+                            int thirdRow = row;
+
+                            data[(0, thirdRow)] = thirdCode;
+                            data[(1, thirdRow)] = "三级科目 " + thirdCode;
+                            SpreadsheetControl.TreeCells[(0, thirdRow)] = new TreeGradeCell(thirdCode, 3, false)
+                            {
+                                BackColor = parentBackground,
+                                IsExpanded = true
+                            };
+                            treeParentRow[thirdRow] = subRow;
+                            heights[thirdRow] = 26;
+                            row++;
+
+                            for (int l = 0; l < 3; l++)
+                            {
+                                string leafCode = thirdCode + (l + 1).ToString("000");
+                                int leafRow = row;
+
+                                data[(0, leafRow)] = leafCode;
+                                data[(1, leafRow)] = "末级科目 " + leafCode;
+                                SpreadsheetControl.TreeCells[(0, leafRow)] = new TreeGradeCell(leafCode, 4, true)
+                                {
+                                    BackColor = leafBackground
+                                };
+                                treeParentRow[leafRow] = thirdRow;
+                                leafRowsByGroup[groupRow].Add(leafRow);
+                                heights[leafRow] = 26;
+                                row++;
+                            }
+                        }
+                    }
+                    else
+                    {
+                        // Three-level group: L2 -> leaves.
+                        for (int l = 0; l < 4; l++)
+                        {
+                            string leafCode = subCode + (l + 1).ToString("000");
+                            int leafRow = row;
+
+                            data[(0, leafRow)] = leafCode;
+                            data[(1, leafRow)] = "末级科目 " + leafCode;
+                            SpreadsheetControl.TreeCells[(0, leafRow)] = new TreeGradeCell(leafCode, 3, true)
+                            {
+                                BackColor = leafBackground
+                            };
+                            treeParentRow[leafRow] = subRow;
+                            leafRowsByGroup[groupRow].Add(leafRow);
+                            heights[leafRow] = 26;
+                            row++;
+                        }
+                    }
+                }
+            }
+
+            foreach (KeyValuePair<int, List<int>> kvp in leafRowsByGroup)
+            {
+                groupLeaves[kvp.Key] = kvp.Value;
+            }
+
+            int maxRow = row - 1;
+
+            // Amount columns: 2 decimals for money, 4 for quantities.
+            for (int r = 1; r <= maxRow; r++)
+            {
+                for (int c = 2; c <= 6; c++)
+                {
+                    int digits = c == 5 ? 4 : 2;
+                    SpreadsheetControl.NumericCells[(c, r)] = new NumericCell(digits) { NegativeRed = true };
+                }
+
+                SpreadsheetControl.CellTextAlignment[(0, r)] = TextAlignment.Left;
+                SpreadsheetControl.CellVerticalAlignment[(0, r)] = VerticalAlignment.Center;
+            }
+
+            // Derived (read-only) columns: amounts of non-leaf rows, plus the whole 金额 column.
+            SpreadsheetControl.SetRangeReadonly(new SelectionRange(2, 0, 2, maxRow), true);
+
+            for (int r = 1; r <= maxRow; r++)
+            {
+                bool isLeaf = SpreadsheetControl.TreeCells[(0, r)].IsLeaf;
+
+                if (!isLeaf)
+                {
+                    SpreadsheetControl.SetRangeReadonly(new SelectionRange(3, r, 6, r), true);
+                }
+            }
+
+            SpreadsheetControl.SetData(data);
+            SpreadsheetControl.SetHeight(heights);
+            SpreadsheetControl.SetWidth(widths);
+            SpreadsheetControl.Refresh();
+
+            Console.WriteLine($"[TreeCell] {maxRow} rows built; click a +/- box to collapse, edit a leaf amount to see CellEditEnded.");
+        }
+
+        /// <summary>
+        /// Wires the tree / numeric events used by the demo sheet.
+        /// </summary>
+        private void WireTreeCellEvents()
+        {
+            SpreadsheetControl.TreeExpand += (s, e) =>
+            {
+                Console.WriteLine($"[TreeExpand] ({e.Column}, {e.Row}) level {e.Cell.Level} -> {(e.IsExpanded ? "expanded" : "collapsed")}");
+            };
+
+            SpreadsheetControl.InvalidInput += (s, e) =>
+            {
+                Console.WriteLine($"[InvalidInput] ({e.Column}, {e.Row}) '{e.InputText}' rejected: {e.Reason}");
+            };
+
+            SpreadsheetControl.CellEditEnded += (s, e) =>
+            {
+                Console.WriteLine($"[CellEditEnded] ({e.Column}, {e.Row}) '{e.OldText}' -> '{e.NewText}' cancelled={e.Cancelled}");
+
+                if (e.Cancelled || e.Row <= 0)
+                {
+                    return;
+                }
+
+                // Debit and credit are mutually exclusive.
+                if (e.Column == 3 && !string.IsNullOrEmpty(e.NewText))
+                {
+                    SpreadsheetControl.SetData(new Dictionary<(int, int), string> { [(4, e.Row)] = "" });
+                }
+                else if (e.Column == 4 && !string.IsNullOrEmpty(e.NewText))
+                {
+                    SpreadsheetControl.SetData(new Dictionary<(int, int), string> { [(3, e.Row)] = "" });
+                }
+
+                // quantity x unit price -> amount
+                if (e.Column == 5 || e.Column == 6)
+                {
+                    decimal quantity = ReadNumber(5, e.Row);
+                    decimal price = ReadNumber(6, e.Row);
+
+                    SpreadsheetControl.SetData(new Dictionary<(int, int), string>
+                    {
+                        [(2, e.Row)] = (quantity * price).ToString(System.Globalization.CultureInfo.InvariantCulture)
+                    });
+                }
+
+                RollUpGroup(e.Row);
+                SpreadsheetControl.Refresh();
+            };
+        }
+
+        private decimal ReadNumber(int column, int row)
+        {
+            if (SpreadsheetControl.Data != null &&
+                SpreadsheetControl.Data.TryGetValue((column, row), out string text) &&
+                decimal.TryParse(text, System.Globalization.NumberStyles.Number, System.Globalization.CultureInfo.InvariantCulture, out decimal value))
+            {
+                return value;
+            }
+
+            return 0m;
+        }
+
+        private void RollUpGroup(int row)
+        {
+            if (!treeParentRow.TryGetValue(row, out int parent))
+            {
+                return;
+            }
+
+            while (treeParentRow.TryGetValue(parent, out int grandParent))
+            {
+                parent = grandParent;
+            }
+
+            if (!groupLeaves.TryGetValue(parent, out List<int> leaves))
+            {
+                return;
+            }
+
+            decimal total = 0m;
+
+            foreach (int leaf in leaves)
+            {
+                total += ReadNumber(2, leaf);
+            }
+
+            SpreadsheetControl.SetData(new Dictionary<(int, int), string>
+            {
+                [(2, parent)] = total.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            });
         }
 
         private void XlsxExportButton_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)

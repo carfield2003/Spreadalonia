@@ -306,16 +306,8 @@ namespace Spreadalonia
         /// <inheritdoc/>
         internal override string GetDisplayText(string rawData)
         {
-            string text = string.Empty;
-
-            if (!string.IsNullOrWhiteSpace(rawData) &&
-                decimal.TryParse(rawData.Trim(), NumberStyles.Number, CultureInfo.CurrentCulture, out decimal value) &&
-                value != 0m)
-            {
-                value = Math.Floor(value * (decimal)Math.Pow(10, Digits) + 0.5m) / (decimal)Math.Pow(10, Digits);
-                string format = "#,#0." + new string('0', Digits);
-                text = value.ToString(format, CultureInfo.CurrentCulture);
-            }
+            // Shares the implementation with NumericCell so that the two can never drift apart.
+            string text = NumberFormatter.Format(rawData, Digits, true);
 
             if (ResponseEmpty && text.Length == 0)
             {
