@@ -85,6 +85,28 @@ namespace Spreadalonia
         }
 
         /// <summary>
+        /// Raised when the user single-clicks a <see cref="ButtonCell"/>. The handler is expected
+        /// to open its own selection dialog (e.g. to pick a department, employee, customer,
+        /// supplier or project) and to write the chosen value back into <see cref="Data"/>.
+        /// </summary>
+        public event EventHandler<CellTappedEventArgs> CellTapped;
+
+        /// <summary>
+        /// Raised when the user double-clicks a <see cref="ButtonCell"/>.
+        /// </summary>
+        public event EventHandler<CellTappedEventArgs> CellDoubleTapped;
+
+        internal void RaiseCellTapped(int column, int row, ButtonCell cell)
+        {
+            CellTapped?.Invoke(this, new CellTappedEventArgs(column, row, cell));
+        }
+
+        internal void RaiseCellDoubleTapped(int column, int row, ButtonCell cell)
+        {
+            CellDoubleTapped?.Invoke(this, new CellTappedEventArgs(column, row, cell));
+        }
+
+        /// <summary>
         /// Raised when the user clicks the +/- box of a <see cref="TreeGradeCell"/>.
         /// </summary>
         public event EventHandler<TreeCellExpandedEventArgs> TreeExpand;
@@ -402,6 +424,14 @@ namespace Spreadalonia
         public Dictionary<(int, int), LinkCell> LinkCells => IsInitialized ? ContentTable.LinkCells : null;
 
         /// <summary>
+        /// The clickable button cells, indexed by (column, row). A button cell renders a button
+        /// (or an underlined link) instead of the regular text; clicking it raises
+        /// <see cref="CellTapped"/> and (by default) suppresses the normal text editing, so that
+        /// the host can open its own selection dialog instead.
+        /// </summary>
+        public Dictionary<(int, int), ButtonCell> ButtonCells => IsInitialized ? ContentTable.ButtonCells : null;
+
+        /// <summary>
         /// The account-tree cells, indexed by (column, row). A tree cell renders an indented
         /// caption with dotted guide lines and a +/- toggle box; clicking the box raises
         /// <see cref="TreeExpand"/> and collapses / expands the rows below.
@@ -467,6 +497,122 @@ namespace Spreadalonia
         public bool IsRowVisible(int row)
         {
             return !IsInitialized || ContentTable.IsRowVisible(row);
+        }
+
+        /// <summary>
+        /// The columns that are currently hidden. A hidden column has a width of zero: its data,
+        /// its column header letter, its grid lines and its header caption are not drawn, and the
+        /// neighbouring columns are drawn seamlessly next to each other.
+        /// </summary>
+        public HashSet<int> HiddenColumns => IsInitialized ? ContentTable.HiddenColumns : null;
+
+        /// <summary>
+        /// Shows or hides a column.
+        /// </summary>
+        /// <param name="column">The column index.</param>
+        /// <param name="visible"><see langword="true"/> to show the column, <see langword="false"/> to hide it.</param>
+        public void SetColumnVisible(int column, bool visible)
+        {
+            if (IsInitialized)
+            {
+                ContentTable.SetColumnVisible(column, visible);
+            }
+        }
+
+        /// <summary>
+        /// Hides the specified column. Same as <see cref="SetColumnVisible(int, bool)"/> with
+        /// <paramref name="visible"/> = <see langword="false"/>.
+        /// </summary>
+        /// <param name="column">The column index.</param>
+        public void HideColumn(int column)
+        {
+            SetColumnVisible(column, false);
+        }
+
+        /// <summary>
+        /// Shows the specified column again. Same as <see cref="SetColumnVisible(int, bool)"/> with
+        /// <paramref name="visible"/> = <see langword="true"/>.
+        /// </summary>
+        /// <param name="column">The column index.</param>
+        public void ShowColumn(int column)
+        {
+            SetColumnVisible(column, true);
+        }
+
+        /// <summary>
+        /// Hides the specified row. Same as <see cref="SetRowVisible(int, bool)"/> with
+        /// <paramref name="visible"/> = <see langword="false"/>.
+        /// </summary>
+        /// <param name="row">The row index.</param>
+        public void HideRow(int row)
+        {
+            SetRowVisible(row, false);
+        }
+
+        /// <summary>
+        /// Shows the specified row again. Same as <see cref="SetRowVisible(int, bool)"/> with
+        /// <paramref name="visible"/> = <see langword="true"/>.
+        /// </summary>
+        /// <param name="row">The row index.</param>
+        public void ShowRow(int row)
+        {
+            SetRowVisible(row, true);
+        }
+
+        /// <summary>
+        /// Shows or hides a set of columns.
+        /// </summary>
+        /// <param name="columns">The column indices.</param>
+        /// <param name="visible"><see langword="true"/> to show the columns, <see langword="false"/> to hide them.</param>
+        public void SetColumnsVisible(IEnumerable<int> columns, bool visible)
+        {
+            if (IsInitialized)
+            {
+                ContentTable.SetColumnsVisible(columns, visible);
+            }
+        }
+
+        /// <summary>
+        /// Shows every column again.
+        /// </summary>
+        public void ShowAllColumns()
+        {
+            if (IsInitialized)
+            {
+                ContentTable.ShowAllColumns();
+            }
+        }
+
+        /// <summary>
+        /// Checks whether a column is currently visible.
+        /// </summary>
+        /// <param name="column">The column index.</param>
+        /// <returns><see langword="true"/> if the column is not hidden.</returns>
+        public bool IsColumnVisible(int column)
+        {
+            return !IsInitialized || ContentTable.IsColumnVisible(column);
+        }
+
+        /// <summary>
+        /// Checks whether a column is currently hidden.
+        /// </summary>
+        /// <param name="column">The column index.</param>
+        /// <returns><see langword="true"/> if the column is hidden.</returns>
+        public bool IsColumnHidden(int column)
+        {
+            return IsInitialized && ContentTable.IsColumnHidden(column);
+        }
+
+        /// <summary>
+        /// Repaints the column and row headers. They draw the header letters and row numbers
+        /// independently of the content area, so they must be invalidated whenever the set of
+        /// hidden columns or rows changes.
+        /// </summary>
+        internal void InvalidateHeaders()
+        {
+            HorizontalHeaderControl?.InvalidateVisual();
+            VerticalHeaderControl?.InvalidateVisual();
+            TopLeftCornerControl?.InvalidateVisual();
         }
 
         /// <summary>
@@ -1683,6 +1829,14 @@ namespace Spreadalonia
             if (this.Selection.Count > 0 && !string.IsNullOrEmpty(e.Text) && e.Text != "\u007f" && !EditingBox.IsFocused)
             {
                 SelectionRange startSelection = this.Selection[this.Selection.Count - 1];
+
+                // A button cell is filled from an external dialog, not typed into: typing must not
+                // open the editing box on it.
+                if (ContentTable != null && ContentTable.IsCellEditSuppressed(startSelection.Left, startSelection.Top))
+                {
+                    return;
+                }
+
                 this.Selection = ImmutableList.Create(new SelectionRange(startSelection.Left, startSelection.Top));
                 this.EditingCell = (startSelection.Left, startSelection.Top);
                 IsEditing = true;
@@ -2084,8 +2238,8 @@ namespace Spreadalonia
                     {
                         for (int row = sel.Top; row <= sel.Bottom; row++)
                         {
-                            // Hidden rows and read-only cells are left untouched.
-                            if (table.IsRowHidden(row) || table.IsCellReadonly(col, row))
+                            // Hidden rows / columns and read-only cells are left untouched.
+                            if (table.IsRowHidden(row) || table.IsColumnHidden(col) || table.IsCellReadonly(col, row))
                             {
                                 continue;
                             }
@@ -2117,14 +2271,14 @@ namespace Spreadalonia
         }
 
         /// <summary>
-        /// Returns the current selection with every hidden row removed, so that copy / fill
-        /// operations never touch collapsed rows.
+        /// Returns the current selection with every hidden row and every hidden column removed, so
+        /// that copy / fill operations never touch collapsed rows or hidden columns.
         /// </summary>
         private ImmutableList<SelectionRange> GetVisibleSelection()
         {
             Table table = ContentTable;
 
-            if (table == null || table.HiddenRows.Count == 0)
+            if (table == null || (table.HiddenRows.Count == 0 && table.HiddenColumns.Count == 0))
             {
                 return this.Selection;
             }
@@ -2133,25 +2287,40 @@ namespace Spreadalonia
 
             foreach (SelectionRange sel in this.Selection)
             {
-                int start = -1;
-
-                for (int row = sel.Top; row <= sel.Bottom + 1; row++)
+                foreach ((int colStart, int colEnd) in GetVisibleBands(sel.Left, sel.Right, table.IsColumnVisible))
                 {
-                    bool visible = row <= sel.Bottom && table.IsRowVisible(row);
-
-                    if (visible && start < 0)
+                    foreach ((int rowStart, int rowEnd) in GetVisibleBands(sel.Top, sel.Bottom, table.IsRowVisible))
                     {
-                        start = row;
-                    }
-                    else if (!visible && start >= 0)
-                    {
-                        builder.Add(new SelectionRange(sel.Left, start, sel.Right, row - 1));
-                        start = -1;
+                        builder.Add(new SelectionRange(colStart, rowStart, colEnd, rowEnd));
                     }
                 }
             }
 
             return builder.Count > 0 ? builder.ToImmutable() : ImmutableList<SelectionRange>.Empty;
+        }
+
+        /// <summary>
+        /// Splits the inclusive index interval [<paramref name="from"/>, <paramref name="to"/>] into
+        /// the maximal contiguous sub-intervals whose indices all satisfy <paramref name="isVisible"/>.
+        /// </summary>
+        private static IEnumerable<(int start, int end)> GetVisibleBands(int from, int to, Func<int, bool> isVisible)
+        {
+            int start = -1;
+
+            for (int i = from; i <= to + 1; i++)
+            {
+                bool visible = i <= to && isVisible(i);
+
+                if (visible && start < 0)
+                {
+                    start = i;
+                }
+                else if (!visible && start >= 0)
+                {
+                    yield return (start, i - 1);
+                    start = -1;
+                }
+            }
         }
 
         /// <summary>
@@ -2225,8 +2394,8 @@ namespace Spreadalonia
                         {
                             for (int x = 0; x < width; x++)
                             {
-                                // Hidden rows and read-only cells are skipped.
-                                if (table.IsRowHidden(y + selection.Top) || table.IsCellReadonly(x + selection.Left, y + selection.Top))
+                                // Hidden rows / columns and read-only cells are skipped.
+                                if (table.IsRowHidden(y + selection.Top) || table.IsColumnHidden(x + selection.Left) || table.IsCellReadonly(x + selection.Left, y + selection.Top))
                                 {
                                     continue;
                                 }
@@ -2272,8 +2441,8 @@ namespace Spreadalonia
                                 int realX = x % width;
                                 int realY = y % height;
 
-                                // Hidden rows and read-only cells are skipped.
-                                if (table.IsRowHidden(y + selection.Top) || table.IsCellReadonly(x + selection.Left, y + selection.Top))
+                                // Hidden rows / columns and read-only cells are skipped.
+                                if (table.IsRowHidden(y + selection.Top) || table.IsColumnHidden(x + selection.Left) || table.IsCellReadonly(x + selection.Left, y + selection.Top))
                                 {
                                     continue;
                                 }
@@ -3864,7 +4033,7 @@ namespace Spreadalonia
                     }
                     else if (e.Key == Key.F2)
                     {
-                        if (e.KeyModifiers == KeyModifiers.None)
+                        if (e.KeyModifiers == KeyModifiers.None && !(ContentTable != null && ContentTable.IsCellEditSuppressed(startSelection.Left, startSelection.Top)))
                         {
                             this.Selection = ImmutableList.Create(new SelectionRange(startSelection.Left, startSelection.Top));
                             this.EditingCell = (startSelection.Left, startSelection.Top);
@@ -3888,7 +4057,7 @@ namespace Spreadalonia
                     }
                     else if (e.Key == Key.Back)
                     {
-                        if (e.KeyModifiers == KeyModifiers.None)
+                        if (e.KeyModifiers == KeyModifiers.None && !(ContentTable != null && ContentTable.IsCellEditSuppressed(startSelection.Left, startSelection.Top)))
                         {
                             this.Selection = ImmutableList.Create(new SelectionRange(startSelection.Left, startSelection.Top));
                             this.EditingCell = (startSelection.Left, startSelection.Top);
@@ -5023,6 +5192,49 @@ namespace Spreadalonia
             Left = left;
             Top = top;
             LinkPara = linkPara;
+        }
+    }
+
+    /// <summary>
+    /// <see cref="EventArgs"/> for the <see cref="Spreadsheet.CellTapped"/> and
+    /// <see cref="Spreadsheet.CellDoubleTapped"/> events, which are raised when the user clicks a
+    /// <see cref="ButtonCell"/>.
+    /// </summary>
+    public class CellTappedEventArgs : EventArgs
+    {
+        /// <summary>
+        /// The column of the clicked cell.
+        /// </summary>
+        public int Column { get; }
+
+        /// <summary>
+        /// The row of the clicked cell.
+        /// </summary>
+        public int Row { get; }
+
+        /// <summary>
+        /// The button cell that was clicked.
+        /// </summary>
+        public ButtonCell Cell { get; }
+
+        /// <summary>
+        /// A host-defined string identifying the kind of cell, taken from
+        /// <see cref="ButtonCell.CellType"/>. A single handler can use it to serve several kinds of
+        /// picker (department, employee, customer, supplier, project …).
+        /// </summary>
+        public string CellType => Cell?.CellType;
+
+        /// <summary>
+        /// The arbitrary object attached to the cell by the host application, taken from
+        /// <see cref="ButtonCell.Tag"/>.
+        /// </summary>
+        public object Tag => Cell?.Tag;
+
+        internal CellTappedEventArgs(int column, int row, ButtonCell cell) : base()
+        {
+            Column = column;
+            Row = row;
+            Cell = cell;
         }
     }
 

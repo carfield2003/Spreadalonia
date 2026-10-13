@@ -30,6 +30,20 @@ namespace Demo
             // Tree / numeric cell demo events (TreeExpand, InvalidInput, CellEditEnded).
             WireTreeCellEvents();
 
+            // Demonstrate the CellTapped event raised by ButtonCell: instead of editing the text
+            // the host opens its own picker and writes the chosen auxiliary item back.
+            SpreadsheetControl.CellTapped += (s, e) =>
+            {
+                Console.WriteLine($"[CellTapped] cell ({e.Column}, {e.Row}) type='{e.CellType}' tag='{e.Tag}'");
+
+                PickAuxiliaryItem(e.Column, e.Row);
+            };
+
+            SpreadsheetControl.CellDoubleTapped += (s, e) =>
+            {
+                Console.WriteLine($"[CellDoubleTapped] cell ({e.Column}, {e.Row}) type='{e.CellType}'");
+            };
+
             // Automated screenshot test for the TitleCell demo.
             if (Environment.GetCommandLineArgs().Any(a => a == "--title-cell-test"))
             {
@@ -96,6 +110,36 @@ namespace Demo
                         await System.Threading.Tasks.Task.Delay(500);
                         SaveScreenshot(@"C:\Users\89664\Desktop\tree_cell_collapsed.png");
                         Console.WriteLine("[Test] TreeCell collapsed screenshot saved.");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine("[Test] EXCEPTION: " + ex);
+                    }
+                    finally
+                    {
+                        Environment.Exit(0);
+                    }
+                };
+            }
+
+            // Automated screenshot test for the hidden-column / ButtonCell demo: shoots the sheet
+            // with all columns visible and again after hiding 年初余额 / 累计发生 (columns 2..5).
+            if (Environment.GetCommandLineArgs().Any(a => a == "--hidden-column-test"))
+            {
+                Opened += async (_, _) =>
+                {
+                    try
+                    {
+                        await System.Threading.Tasks.Task.Delay(500);
+                        HiddenColumnButton_Click(null!, null!);
+                        await System.Threading.Tasks.Task.Delay(800);
+                        SaveScreenshot(@"C:\Users\89664\Desktop\hidden_column_all.png");
+                        Console.WriteLine("[Test] All columns screenshot saved.");
+
+                        SpreadsheetControl.SetColumnsVisible(new[] { 2, 3, 4, 5 }, false);
+                        await System.Threading.Tasks.Task.Delay(500);
+                        SaveScreenshot(@"C:\Users\89664\Desktop\hidden_column_hidden.png");
+                        Console.WriteLine("[Test] Hidden columns screenshot saved.");
                     }
                     catch (Exception ex)
                     {
@@ -975,6 +1019,158 @@ namespace Demo
             {
                 [(2, parent)] = total.ToString(System.Globalization.CultureInfo.InvariantCulture)
             });
+        }
+
+        // The auxiliary items offered by the simulated picker of the hidden-column demo.
+        private static readonly string[] AuxiliaryItems =
+        {
+            "销售部", "财务部", "采购部", "生产车间", "研发中心"
+        };
+
+        // Populated by HiddenColumnButton_Click: the column that holds the ButtonCells.
+        private int auxColumn = 8;
+
+        /// <summary>
+        /// Builds a trial-balance style sheet: the "年初余额" and "累计发生" columns are hidden
+        /// the way SSFinance hides them when the account book starts in the current period, and
+        /// the last column holds <see cref="ButtonCell"/>s that open an auxiliary-item picker
+        /// (department / employee / customer / supplier / project) through
+        /// <see cref="Spreadsheet.CellTapped"/>.
+        /// </summary>
+        private void HiddenColumnButton_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+        {
+            SpreadsheetControl.MergedRanges = null;
+            SpreadsheetControl.CellBackgrounds = null;
+            SpreadsheetControl.CellBorders = null;
+            SpreadsheetControl.MaxTableWidth = 9;
+            SpreadsheetControl.MaxTableHeight = int.MaxValue - 2;
+            SpreadsheetControl.CellFontSize?.Clear();
+            SpreadsheetControl.CellTypefaces?.Clear();
+            SpreadsheetControl.CellForeground?.Clear();
+            SpreadsheetControl.CellTextAlignment?.Clear();
+            SpreadsheetControl.CellVerticalAlignment?.Clear();
+            SpreadsheetControl.CellMargin?.Clear();
+            SpreadsheetControl.TitleCells?.Clear();
+            SpreadsheetControl.LinkCells?.Clear();
+            SpreadsheetControl.TreeCells?.Clear();
+            SpreadsheetControl.NumericCells?.Clear();
+            SpreadsheetControl.ButtonCells?.Clear();
+            SpreadsheetControl.ClearContent();
+
+            // A previous demo may have hidden columns: start from a clean slate.
+            SpreadsheetControl.ShowAllRows();
+            SpreadsheetControl.ShowAllColumns();
+
+            string[] headers =
+            {
+                "科目编码", "科目名称",
+                "年初借方", "年初贷方",     // 年初余额 – hidden when the book starts this period
+                "累计借方", "累计贷方",     // 累计发生 – hidden when the book starts this period
+                "期初借方", "期初贷方",
+                "辅助项"
+            };
+
+            var data = new Dictionary<(int, int), string>();
+
+            for (int c = 0; c < headers.Length; c++)
+            {
+                data[(c, 0)] = headers[c];
+                SpreadsheetControl.CellTypefaces[(c, 0)] = new Typeface(FontFamily.Default, FontStyle.Normal, FontWeight.Bold);
+                SpreadsheetControl.CellTextAlignment[(c, 0)] = TextAlignment.Center;
+                SpreadsheetControl.CellVerticalAlignment[(c, 0)] = VerticalAlignment.Center;
+            }
+
+            string[,] rows =
+            {
+                { "1001", "库存现金",     "12,000.00", "",           "84,120.00", "51,400.00", "44,720.00", "",           "" },
+                { "1002", "银行存款",     "860,000.00", "",          "1,530,000.00", "980,000.00", "1,410,000.00", "",    "" },
+                { "1122", "应收账款",     "320,000.00", "",          "640,000.00", "410,000.00", "550,000.00", "",       "" },
+                { "2202", "应付账款",     "",           "210,000.00", "390,000.00", "520,000.00", "",           "340,000.00", "" },
+                { "5001", "主营业务收入", "",           "0.00",       "2,180,000.00", "2,180,000.00", "",       "0.00",  "" },
+            };
+
+            for (int r = 0; r < rows.GetLength(0); r++)
+            {
+                for (int c = 0; c < headers.Length; c++)
+                {
+                    data[(c, r + 1)] = rows[r, c];
+                }
+
+                SpreadsheetControl.CellTextAlignment[(0, r + 1)] = TextAlignment.Left;
+                SpreadsheetControl.CellTextAlignment[(1, r + 1)] = TextAlignment.Left;
+
+                for (int c = 2; c <= 7; c++)
+                {
+                    SpreadsheetControl.CellTextAlignment[(c, r + 1)] = TextAlignment.Right;
+                    SpreadsheetControl.NumericCells[(c, r + 1)] = new NumericCell(2) { NegativeRed = true };
+                }
+            }
+
+            SpreadsheetControl.SetData(data);
+
+            SpreadsheetControl.SetHeight(new Dictionary<int, double>
+            {
+                [0] = 30, [1] = 26, [2] = 26, [3] = 26, [4] = 26, [5] = 26,
+            });
+
+            SpreadsheetControl.SetWidth(new Dictionary<int, double>
+            {
+                [0] = 110, [1] = 160, [2] = 110, [3] = 110,
+                [4] = 110, [5] = 110, [6] = 110, [7] = 110, [8] = 140,
+            });
+
+            // Header background + grid borders.
+            SpreadsheetControl.CellBackgrounds = new List<CellBackground>
+            {
+                new CellBackground(new SelectionRange(0, 0, 8, 0), new SolidColorBrush(Color.Parse("#D9E2F3"))),
+            };
+
+            // Auxiliary item picker: a ButtonCell per data row in the last column.
+            auxColumn = 8;
+
+            for (int r = 1; r <= rows.GetLength(0); r++)
+            {
+                SpreadsheetControl.ButtonCells[(auxColumn, r)] = new ButtonCell("选择辅助项", "AuxItem", "row" + r)
+                {
+                    Background = new SolidColorBrush(Color.Parse("#F2F2F2")),
+                    PressedBackground = new SolidColorBrush(Color.Parse("#C6D8F0")),
+                    Foreground = new SolidColorBrush(Color.Parse("#337AB7")),
+                };
+
+                SpreadsheetControl.CellTextAlignment[(auxColumn, r)] = TextAlignment.Center;
+                SpreadsheetControl.CellVerticalAlignment[(auxColumn, r)] = VerticalAlignment.Center;
+            }
+
+            SpreadsheetControl.Refresh();
+
+            Console.WriteLine("[HiddenColumn] Sheet built. Call HideColumn(2..5) to drop 年初余额 / 累计发生.");
+        }
+
+        /// <summary>
+        /// Simulates the auxiliary-item dialog that a real application would open from the
+        /// <see cref="Spreadsheet.CellTapped"/> handler: it picks the next item of
+        /// <see cref="AuxiliaryItems"/> and writes it back into the cell, which repaints it.
+        /// </summary>
+        private void PickAuxiliaryItem(int column, int row)
+        {
+            string current = SpreadsheetControl.Data != null && SpreadsheetControl.Data.TryGetValue((column, row), out string text)
+                ? text
+                : "";
+
+            int index = Array.IndexOf(AuxiliaryItems, current);
+            string next = AuxiliaryItems[(index + 1) % AuxiliaryItems.Length];
+
+            SpreadsheetControl.SetData(new Dictionary<(int, int), string> { [(column, row)] = next });
+
+            if (SpreadsheetControl.ButtonCells != null &&
+                SpreadsheetControl.ButtonCells.TryGetValue((column, row), out ButtonCell cell) &&
+                cell != null)
+            {
+                cell.Text = next;
+            }
+
+            SpreadsheetControl.Refresh();
+            Console.WriteLine($"[CellTapped] ({column}, {row}) -> '{next}' written back.");
         }
 
         private void XlsxExportButton_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)

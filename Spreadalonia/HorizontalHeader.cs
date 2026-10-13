@@ -391,7 +391,9 @@ namespace Spreadalonia
                 {
                     if (xPos - (clickedColumn > 0 ? lastDrawnXs[clickedColumn - 1] : 0) <= 5)
                     {
-                        clickedColumn--;
+                        // Dragging the left border of a column resizes the previous *visible*
+                        // column: a hidden one has no border of its own and must not be resized.
+                        clickedColumn = Owner.NextVisibleColumn(clickedColumn, -1);
                     }
 
                     if (e.ClickCount == 1)
@@ -704,7 +706,13 @@ namespace Spreadalonia
                 double currX = 0;
                 for (int x = 0; x <= width; x++)
                 {
-                    context.DrawLine(gridPen, new Point(currX, 0).SnapToDevicePixels(this), new Point(currX, this.Bounds.Height).SnapToDevicePixels(this));
+                    // A hidden column has a width of zero, so its left edge coincides with the
+                    // left edge of the following column: the separator is drawn by that column
+                    // instead, avoiding a duplicated (double-drawn) line.
+                    if (!Owner.IsColumnHidden(left + x))
+                    {
+                        context.DrawLine(gridPen, new Point(currX, 0).SnapToDevicePixels(this), new Point(currX, this.Bounds.Height).SnapToDevicePixels(this));
+                    }
 
                     currX += Owner.GetWidth(left + x);
                     xs[x] = currX;
@@ -714,6 +722,12 @@ namespace Spreadalonia
 
                 for (int x = 0; x <= width; x++)
                 {
+                    // Hidden columns occupy no horizontal space; nothing is highlighted for them.
+                    if (Owner.IsColumnHidden(left + x))
+                    {
+                        continue;
+                    }
+
                     if (hoverColumn == x + left)
                     {
                         context.FillRectangle(hoverHighlightBrush, new Rect(new Point(x == 0 ? 0 : xs[x - 1], 0).SnapToDevicePixels(this, true, true), new Point(xs[x], this.Bounds.Height).SnapToDevicePixels(this, true, true)));
@@ -734,6 +748,13 @@ namespace Spreadalonia
 
                 for (int x = 0; x <= width; x++)
                 {
+                    // Hidden columns do not get a header letter, so the letters of the remaining
+                    // columns stay contiguous (A, B, D … rather than A, B, "", D).
+                    if (Owner.IsColumnHidden(left + x))
+                    {
+                        continue;
+                    }
+
                     string txt = GetLetter(x + left);
 
                     double realX = x == 0 ? 0 : xs[x - 1];
@@ -754,6 +775,11 @@ namespace Spreadalonia
 
                 for (int x = 0; x <= width; x++)
                 {
+                    if (Owner.IsColumnHidden(left + x))
+                    {
+                        continue;
+                    }
+
                     if (selected[x] > 0 && shouldBeAccented[x] == true)
                     {
                         context.DrawLine(selectionPen, new Point((x == 0 ? 0 : xs[x - 1]), this.Bounds.Height - 1).SnapToDevicePixels(this, true, true), new Point(xs[x] + 1, this.Bounds.Height - 1).SnapToDevicePixels(this, true, true));

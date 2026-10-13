@@ -179,6 +179,15 @@ namespace Spreadalonia
         public Dictionary<(int, int), LinkCell> LinkCells { get; internal set; } = new Dictionary<(int, int), LinkCell>();
 
         /// <summary>
+        /// The clickable button cells, indexed by (column, row). A button cell renders a button
+        /// (or an underlined link) instead of the regular text content; hovering over it shows a
+        /// hand cursor and clicking it raises the <see cref="Spreadsheet.CellTapped"/> event, which
+        /// the host uses to open its own selection dialog (e.g. to pick an auxiliary accounting
+        /// item) instead of editing the text.
+        /// </summary>
+        public Dictionary<(int, int), ButtonCell> ButtonCells { get; internal set; } = new Dictionary<(int, int), ButtonCell>();
+
+        /// <summary>
         /// The account-tree cells, indexed by (column, row). A tree cell renders an indented
         /// caption with dotted guide lines and a +/- toggle box; clicking the box raises the
         /// <see cref="Spreadsheet.TreeExpand"/> event and (in automatic mode) collapses or expands
@@ -198,6 +207,15 @@ namespace Spreadalonia
         /// zero, so it disappears from the sheet without renumbering the remaining rows.
         /// </summary>
         public HashSet<int> HiddenRows { get; } = new HashSet<int>();
+
+        /// <summary>
+        /// The columns that are currently hidden. While a column is hidden its width is zero, so
+        /// it disappears from the sheet without renumbering the remaining columns: the column
+        /// header letter, the header caption, the grid lines and the cell content of a hidden
+        /// column are all skipped, and the neighbouring columns are drawn seamlessly next to each
+        /// other.
+        /// </summary>
+        public HashSet<int> HiddenColumns { get; } = new HashSet<int>();
 
         /// <summary>
         /// The ranges that are read-only. Cells inside a read-only range cannot be edited, pasted
@@ -385,7 +403,9 @@ namespace Spreadalonia
             int leftIndex = 0;
             double currWidth = 0;
 
-            while (currWidth < x)
+            // Hidden columns have a width of zero, so currWidth does not advance for them; the
+            // MaxTableWidth guard makes sure the loop can never run away.
+            while (currWidth < x && leftIndex < MaxTableWidth)
             {
                 currWidth += GetWidth(leftIndex);
                 leftIndex++;
@@ -410,7 +430,11 @@ namespace Spreadalonia
             double leftDelta = -x;
 
             double nextWidth = GetWidth(leftIndex);
-            while (currWidth + nextWidth < x)
+
+            // Hidden columns have a width of zero, so currWidth does not advance for them; the
+            // MaxTableWidth guard makes sure the loop can never run away (GetRangeY has the
+            // equivalent guard for hidden rows).
+            while (currWidth + nextWidth < x && leftIndex < MaxTableWidth)
             {
                 currWidth += nextWidth;
                 leftDelta = currWidth - x;
@@ -476,6 +500,14 @@ namespace Spreadalonia
 
         internal double GetWidth(int columnIndex)
         {
+            // Hidden columns have a width of zero: they keep their index, so all the existing
+            // column-indexed dictionaries stay valid, but they occupy no horizontal space and
+            // are skipped by the rendering and hit testing code.
+            if (IsColumnHidden(columnIndex))
+            {
+                return 0;
+            }
+
             if (!ColumnWidths.TryGetValue(columnIndex, out double h))
             {
                 return DefaultColumnWidth;
@@ -637,6 +669,162 @@ namespace Spreadalonia
                 InvalidateTreeCache();
                 this.InvalidateVisual();
             }
+        }
+
+        /// <summary>
+        /// Checks whether the specified column is currently hidden.
+        /// </summary>
+        /// <param name="column">The column index.</param>
+        /// <returns><see langword="true"/> if the column is hidden.</returns>
+        public bool IsColumnHidden(int column)
+        {
+            return HiddenColumns != null && HiddenColumns.Contains(column);
+        }
+
+        /// <summary>
+        /// Checks whether the specified column is currently visible (not hidden).
+        /// </summary>
+        /// <param name="column">The column index.</param>
+        /// <returns><see langword="true"/> if the column is visible.</returns>
+        public bool IsColumnVisible(int column)
+        {
+            return !IsColumnHidden(column);
+        }
+
+        /// <summary>
+        /// Shows or hides a column. A hidden column has a width of zero and is skipped by the
+        /// rendering, hit testing, navigation, copy and export code; it keeps its index, so every
+        /// (column, row) key of the cell dictionaries stays valid.
+        /// </summary>
+        /// <param name="column">The column index.</param>
+        /// <param name="visible"><see langword="true"/> to show the column, <see langword="false"/> to hide it.</param>
+        public void SetColumnVisible(int column, bool visible)
+        {
+            bool changed = visible ? HiddenColumns.Remove(column) : HiddenColumns.Add(column);
+
+            if (changed)
+            {
+                this.InvalidateVisual();
+                this.InvalidateHeaders();
+            }
+        }
+
+        /// <summary>
+        /// Shows or hides a set of columns.
+        /// </summary>
+        /// <param name="columns">The column indices.</param>
+        /// <param name="visible"><see langword="true"/> to show the columns, <see langword="false"/> to hide them.</param>
+        public void SetColumnsVisible(IEnumerable<int> columns, bool visible)
+        {
+            if (columns == null)
+            {
+                return;
+            }
+
+            foreach (int column in columns)
+            {
+                if (visible)
+                {
+                    HiddenColumns.Remove(column);
+                }
+                else
+                {
+                    HiddenColumns.Add(column);
+                }
+            }
+
+            this.InvalidateVisual();
+            this.InvalidateHeaders();
+        }
+
+        /// <summary>
+        /// Removes every entry from <see cref="HiddenColumns"/>, showing all columns again.
+        /// </summary>
+        public void ShowAllColumns()
+        {
+            if (HiddenColumns.Count > 0)
+            {
+                HiddenColumns.Clear();
+                this.InvalidateVisual();
+                this.InvalidateHeaders();
+            }
+        }
+
+        /// <summary>
+        /// Returns the next column that is not hidden, starting from <paramref name="column"/> and
+        /// moving in the specified direction. Returns <paramref name="column"/> itself when there
+        /// is no such column, so that keyboard navigation never lands on an invisible cell.
+        /// </summary>
+        /// <param name="column">The column to start from (exclusive).</param>
+        /// <param name="direction">+1 to search rightwards, -1 to search leftwards.</param>
+        /// <returns>The next visible column, or <paramref name="column"/> when there is none.</returns>
+        public int NextVisibleColumn(int column, int direction)
+        {
+            int step = direction >= 0 ? 1 : -1;
+            int limit = Math.Min(MaxTableWidth, GetLastUsedColumn() + 1);
+            int candidate = column + step;
+
+            while (candidate >= 0 && candidate <= limit)
+            {
+                if (IsColumnVisible(candidate))
+                {
+                    return candidate;
+                }
+
+                candidate += step;
+            }
+
+            return column;
+        }
+
+        /// <summary>
+        /// Returns the highest column index that is referenced by the cell data, the tree cells or
+        /// the column widths. Used to bound the search performed by <see cref="NextVisibleColumn"/>.
+        /// </summary>
+        internal int GetLastUsedColumn()
+        {
+            int max = -1;
+
+            foreach (KeyValuePair<(int, int), string> kvp in Data)
+            {
+                if (kvp.Key.Item1 > max)
+                {
+                    max = kvp.Key.Item1;
+                }
+            }
+
+            if (TreeCells != null)
+            {
+                foreach (KeyValuePair<(int, int), TreeGradeCell> kvp in TreeCells)
+                {
+                    if (kvp.Key.Item1 > max)
+                    {
+                        max = kvp.Key.Item1;
+                    }
+                }
+            }
+
+            if (ColumnWidths != null)
+            {
+                foreach (KeyValuePair<int, double> kvp in ColumnWidths)
+                {
+                    if (kvp.Key > max)
+                    {
+                        max = kvp.Key;
+                    }
+                }
+            }
+
+            return max;
+        }
+
+        /// <summary>
+        /// Asks the owning <see cref="Spreadsheet"/> to repaint the column and row headers, which
+        /// draw the header letters and numbers independently of the content area.
+        /// </summary>
+        private void InvalidateHeaders()
+        {
+            this.Container?.InvalidateHeaders();
         }
 
         /// <summary>
@@ -1036,6 +1224,13 @@ namespace Spreadalonia
                     return;
                 }
 
+                // Hovering over a button cell shows a hand cursor.
+                if (TryHitButtonCell(xPos, yPos, out ButtonCell hoveredButton, out _))
+                {
+                    this.Cursor = HandCursor;
+                    return;
+                }
+
                 if (Selection.Count == 1)
                 {
                     double selectionLeft = 0;
@@ -1325,6 +1520,27 @@ namespace Spreadalonia
                 this.InvalidateVisual();
             }
 
+            // Release a pressed button cell: if the pointer is still over it, notify the host so
+            // that it can open its own selection dialog.
+            if (pressedButtonCell != null)
+            {
+                PointerPoint currentPoint = e.GetCurrentPoint(this);
+                double xPos = currentPoint.Position.X - lastDrawnDeltaX;
+                double yPos = currentPoint.Position.Y - lastDrawnDeltaY;
+
+                ButtonCell releasedButton = pressedButtonCell;
+                (int, int) releasedButtonKey = pressedButtonCellKey;
+                pressedButtonCell = null;
+                releasedButton.IsPressed = false;
+
+                if (releasedButton.HitRect.Contains(new Point(xPos, yPos)))
+                {
+                    this.Container?.RaiseCellTapped(releasedButtonKey.Item1, releasedButtonKey.Item2, releasedButton);
+                }
+
+                this.InvalidateVisual();
+            }
+
             if (pointerPressedAction == 2 && (selectionMoveDelta.Item1 != 0 || selectionMoveDelta.Item2 != 0))
             {
                 if (selectionBeingMoved.IsFinite(this))
@@ -1527,6 +1743,8 @@ namespace Spreadalonia
         bool mouseMoveShiftPressed = false;
         LinkCell pressedLinkCell = null;
         (int, int) pressedLinkCellKey = (-1, -1);
+        ButtonCell pressedButtonCell = null;
+        (int, int) pressedButtonCellKey = (-1, -1);
         private static readonly Cursor HandCursor = new Cursor(StandardCursorType.Hand);
 
         /// <summary>
@@ -1557,6 +1775,55 @@ namespace Spreadalonia
             }
 
             return false;
+        }
+
+        /// <summary>
+        /// Returns the <see cref="ButtonCell"/> that contains the given pointer position. The hit
+        /// rectangles are updated every time the table is drawn, so only visible button cells can
+        /// be hit.
+        /// </summary>
+        private bool TryHitButtonCell(double xPos, double yPos, out ButtonCell buttonCell, out (int, int) key)
+        {
+            return TryHitButtonCell(new Point(xPos, yPos), out buttonCell, out key);
+        }
+
+        /// <summary>
+        /// Returns the <see cref="ButtonCell"/> that contains the given point.
+        /// </summary>
+        private bool TryHitButtonCell(Point p, out ButtonCell buttonCell, out (int, int) key)
+        {
+            buttonCell = null;
+            key = (-1, -1);
+
+            if (this.ButtonCells == null || this.ButtonCells.Count == 0)
+            {
+                return false;
+            }
+
+            foreach (KeyValuePair<(int, int), ButtonCell> kvp in this.ButtonCells)
+            {
+                if (kvp.Value != null && kvp.Value.HitRect.Contains(p))
+                {
+                    buttonCell = kvp.Value;
+                    key = kvp.Key;
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Whether the cell at the specified coordinates is a <see cref="ButtonCell"/> whose
+        /// <see cref="ButtonCell.SuppressEdit"/> flag is set, i.e. a cell whose value is chosen
+        /// from an external dialog rather than typed by the user.
+        /// </summary>
+        internal bool IsCellEditSuppressed(int column, int row)
+        {
+            return this.ButtonCells != null &&
+                   this.ButtonCells.TryGetValue((column, row), out ButtonCell cell) &&
+                   cell != null &&
+                   cell.SuppressEdit;
         }
 
         /// <summary>
@@ -1789,6 +2056,16 @@ namespace Spreadalonia
                         this.InvalidateVisual();
                     }
 
+                    // Pressing a button cell arms it; the CellTapped event is raised on release so
+                    // that a click can still be cancelled by dragging away from the button.
+                    if (TryHitButtonCell(xPos, yPos, out ButtonCell pressedButton, out (int, int) pressedButtonKey))
+                    {
+                        pressedButtonCell = pressedButton;
+                        pressedButtonCellKey = pressedButtonKey;
+                        pressedButton.IsPressed = true;
+                        this.InvalidateVisual();
+                    }
+
                     if (e.KeyModifiers == Spreadsheet.ControlModifier)
                     {
                         bool found = false;
@@ -1889,6 +2166,15 @@ namespace Spreadalonia
                     if (TryHitTreeBox(xPos, yPos, out TreeGradeCell doubleClickedTree, out (int, int) doubleClickedTreeKey))
                     {
                         pointerPressedAction = 0;
+                        return;
+                    }
+
+                    // Double clicking a button cell raises CellDoubleTapped instead of opening the
+                    // editing box.
+                    if (TryHitButtonCell(xPos, yPos, out ButtonCell doubleClickedButton, out (int, int) doubleClickedButtonKey))
+                    {
+                        pointerPressedAction = 0;
+                        this.Container?.RaiseCellDoubleTapped(doubleClickedButtonKey.Item1, doubleClickedButtonKey.Item2, doubleClickedButton);
                         return;
                     }
 
@@ -2031,6 +2317,20 @@ namespace Spreadalonia
                         lastDrawnXs = xs;
                         lastDrawnYs = ys;
 
+                        // Discard the hit rectangles of the button cells: only the ones that are
+                        // actually drawn below get a new one, so that a button that has been
+                        // scrolled out of view can no longer be clicked.
+                        if (ButtonCells != null && ButtonCells.Count > 0)
+                        {
+                            foreach (KeyValuePair<(int, int), ButtonCell> kvp in ButtonCells)
+                            {
+                                if (kvp.Value != null)
+                                {
+                                    kvp.Value.HitRect = default;
+                                }
+                            }
+                        }
+
                         // Draw vertical grid lines, skipping the interior of merged ranges
                         for (int x = 0; x <= width; x++)
                         {
@@ -2122,11 +2422,19 @@ namespace Spreadalonia
 
                             for (int x = 0; x <= width; x++)
                             {
+                                // Hidden columns have a width of zero; nothing of theirs is drawn,
+                                // otherwise their text would spill over the neighbouring column.
+                                if (IsColumnHidden(left + x))
+                                {
+                                    continue;
+                                }
+
                                 bool hasData = Data.TryGetValue((left + x, top + y), out string txt);
                                 bool hasTreeCell = TreeCells.TryGetValue((left + x, top + y), out TreeGradeCell treeCell) && treeCell != null;
                                 bool hasNumericCell = NumericCells.TryGetValue((left + x, top + y), out NumericCell numericCellPlaceholder) && numericCellPlaceholder != null;
+                                bool hasButtonCell = ButtonCells.TryGetValue((left + x, top + y), out ButtonCell buttonCell) && buttonCell != null;
 
-                                if (!hasData && !hasTreeCell && !hasNumericCell)
+                                if (!hasData && !hasTreeCell && !hasNumericCell && !hasButtonCell)
                                 {
                                     continue;
                                 }
@@ -2154,6 +2462,48 @@ namespace Spreadalonia
                                     treeCell.Render(context, new Rect(treeX, treeY, xs[x] - treeX, ys[y] - treeY), xs[width], this, treeFace, treeFontSize, this.Foreground, lvl => HasNextSiblingAtLevel(treeRow, lvl));
                                 }
 
+                                // Button cells render a clickable button instead of the default
+                                // text; they carry their own content, so they do not need any data.
+                                if (hasButtonCell && (!Container.IsEditing || left + x != Container.EditingCell.Item1 || top + y != Container.EditingCell.Item2))
+                                {
+                                    double buttonX = x == 0 ? 0 : xs[x - 1];
+                                    double buttonY = y == 0 ? 0 : ys[y - 1];
+
+                                    if (!CellTypefaces.TryGetValue((left + x, top + y), out Typeface buttonFace) &&
+                                        !RowTypefaces.TryGetValue(top + y, out buttonFace) &&
+                                        !ColumnTypefaces.TryGetValue(left + x, out buttonFace))
+                                    {
+                                        buttonFace = defaultTypeFace;
+                                    }
+
+                                    double buttonFontSize = this.FontSize;
+                                    if (CellFontSize.TryGetValue((left + x, top + y), out double customButtonFontSize))
+                                    {
+                                        buttonFontSize = customButtonFontSize;
+                                    }
+
+                                    if (!CellForeground.TryGetValue((left + x, top + y), out IBrush buttonForeground) &&
+                                        !RowForeground.TryGetValue(top + y, out buttonForeground) &&
+                                        !ColumnForeground.TryGetValue(left + x, out buttonForeground))
+                                    {
+                                        buttonForeground = this.Foreground;
+                                    }
+
+                                    TextAlignment buttonHor = this.DefaultTextAlignment;
+                                    if (CellTextAlignment.TryGetValue((left + x, top + y), out TextAlignment customButtonHor))
+                                    {
+                                        buttonHor = customButtonHor;
+                                    }
+
+                                    VerticalAlignment buttonVer = this.DefaultVerticalAlignment;
+                                    if (CellVerticalAlignment.TryGetValue((left + x, top + y), out VerticalAlignment customButtonVer))
+                                    {
+                                        buttonVer = customButtonVer;
+                                    }
+
+                                    buttonCell.Render(context, new Rect(buttonX, buttonY, xs[x] - buttonX, ys[y] - buttonY), buttonForeground, buttonFace, buttonFontSize, buttonHor, buttonVer, txt);
+                                }
+
                                 if (hasData)
                                 {
                                     if (mergedCells != null && mergedCells.Contains((left + x, top + y)))
@@ -2167,6 +2517,12 @@ namespace Spreadalonia
                                         // A tree cell draws its own caption; the raw text must not be
                                         // drawn on top of it.
                                         if (hasTreeCell)
+                                        {
+                                            continue;
+                                        }
+
+                                        // A button cell has just drawn its own content.
+                                        if (hasButtonCell)
                                         {
                                             continue;
                                         }

@@ -64,6 +64,14 @@ namespace Spreadalonia
         public bool ExportHiddenRows { get; set; } = false;
 
         /// <summary>
+        /// Whether columns that are hidden in the control (<see cref="Table.HiddenColumns"/>) are
+        /// written to the worksheet as normal, visible columns. <see langword="false"/> by default:
+        /// hidden columns are hidden in Excel and their content is not written, matching what the
+        /// user sees on screen.
+        /// </summary>
+        public bool ExportHiddenColumns { get; set; } = false;
+
+        /// <summary>
         /// An optional callback invoked with a human readable warning when a cell is exported
         /// with its cached value instead of its formula (e.g. because it uses a custom function
         /// that Excel does not know, or a single-quoted string literal).
@@ -218,8 +226,17 @@ namespace Spreadalonia
                     }
                 }
 
-                // Row heights (DIP pixels -> Excel points) and collapsed rows.
+                // Row heights (DIP pixels -> Excel points) and collapsed rows / hidden columns.
                 bool exportHidden = options != null && options.ExportHiddenRows;
+                bool exportHiddenColumns = options != null && options.ExportHiddenColumns;
+
+                for (int c = 0; c <= maxCol; c++)
+                {
+                    if (table.IsColumnHidden(c))
+                    {
+                        sheet.Column(c + 1).Hide();
+                    }
+                }
 
                 for (int r = 0; r <= maxRow; r++)
                 {
@@ -267,6 +284,12 @@ namespace Spreadalonia
 
                     for (int c = 0; c <= maxCol; c++)
                     {
+                        // Hidden columns are not written unless ExportHiddenColumns is set.
+                        if (!exportHiddenColumns && table.IsColumnHidden(c))
+                        {
+                            continue;
+                        }
+
                         if (mergedInnerCells.Contains((c, r)))
                         {
                             continue;
