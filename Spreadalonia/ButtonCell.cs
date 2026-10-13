@@ -25,6 +25,26 @@ using System.Globalization;
 namespace Spreadalonia
 {
     /// <summary>
+    /// The rendering mode of a <see cref="ButtonCell"/>.
+    /// </summary>
+    public enum ButtonCellMode
+    {
+        /// <summary>
+        /// The whole cell is rendered as a clickable button.
+        /// </summary>
+        Button,
+
+        /// <summary>
+        /// The cell keeps its normal text and a small icon is drawn at the right edge of the
+        /// cell. Clicking the icon raises the cell events, while the rest of the cell behaves
+        /// like a normal cell. This is the reference-picker ("RefCell") style used by
+        /// SSFinance: a magnifier icon invites the user to look up a value (customer,
+        /// department, employee …) from an external dialog.
+        /// </summary>
+        Icon
+    }
+
+    /// <summary>
     /// A custom cell body that renders a clickable button (or link-styled button). It is meant for
     /// cells whose value is not typed by the user but chosen from an external dialog, e.g. the
     /// auxiliary-accounting items (department, employee, customer, supplier, project) of a
@@ -100,6 +120,42 @@ namespace Spreadalonia
         public bool StretchToCell { get; set; }
 
         /// <summary>
+        /// The rendering mode of the cell: a full-cell <see cref="ButtonCellMode.Button"/> or a
+        /// small icon at the right edge of an otherwise normal cell
+        /// (<see cref="ButtonCellMode.Icon"/>).
+        /// </summary>
+        public ButtonCellMode Mode { get; set; } = ButtonCellMode.Button;
+
+        /// <summary>
+        /// The size of the icon in icon mode, in device independent pixels. The default of 20
+        /// matches the button size of the SSFinance RefCell.
+        /// </summary>
+        public double IconSize { get; set; } = 20;
+
+        /// <summary>
+        /// The SVG path data of the icon drawn in icon mode. When it is empty a magnifier glyph
+        /// (the one used by the SSFinance RefCell) is drawn.
+        /// </summary>
+        public string IconPath { get; set; }
+
+        /// <summary>
+        /// The brush used to draw the icon glyph. The default is a light grey; hovering the icon
+        /// switches to <see cref="IconHoverFill"/>.
+        /// </summary>
+        public IBrush IconFill { get; set; }
+
+        /// <summary>
+        /// The brush used to draw the icon glyph while the pointer is over the icon.
+        /// </summary>
+        public IBrush IconHoverFill { get; set; }
+
+        /// <summary>
+        /// The brush used to fill the icon rectangle while the pointer is over the icon. The
+        /// default is a light grey, matching the SSFinance RefCell.
+        /// </summary>
+        public IBrush IconHoverBackground { get; set; }
+
+        /// <summary>
         /// Whether the default text editing is suppressed for this cell. When <see langword="true"/>
         /// (the default) double clicking, typing or pressing F2 raises the cell events instead of
         /// opening the editing box.
@@ -108,7 +164,117 @@ namespace Spreadalonia
 
         internal bool IsPressed { get; set; }
 
+        /// <summary>
+        /// Whether the pointer currently hovers over the hit-test rectangle. In icon mode this
+        /// highlights the icon.
+        /// </summary>
+        internal bool IsHovered { get; set; }
+
         internal Rect HitRect { get; set; }
+
+        /// <summary>
+        /// The magnifier glyph used by the SSFinance RefCell, reused as the default icon.
+        /// </summary>
+        private static readonly StreamGeometry MagnifierGeometry = StreamGeometry.Parse("M42.5,22A12.5,12.5 0 0,1 55,34.5A12.5,12.5 0 0,1 42.5,47C40.14,47 37.92,46.34 36,45.24L26.97,54.27C25.8,55.44 23.9,55.44 22.73,54.27C21.56,53.1 21.56,51.2 22.73,50.03L31.8,40.96C30.66,39.08 30,36.86 30,34.5A12.5,12.5 0 0,1 42.5,22M42.5,26A8.5,8.5 0 0,0 34,34.5A8.5,8.5 0 0,0 42.5,43A8.5,8.5 0 0,0 51,34.5A8.5,8.5 0 0,0 42.5,26Z");
+
+        /// <summary>
+        /// Cache of the custom icon geometry, so that the path is only parsed once.
+        /// </summary>
+        private string cachedIconPath;
+
+        private StreamGeometry cachedIconGeometry;
+
+        /// <summary>
+        /// Returns the parsed icon geometry: <see cref="IconPath"/> when set, the default
+        /// magnifier otherwise.
+        /// </summary>
+        private StreamGeometry GetIconGeometry()
+        {
+            if (string.IsNullOrEmpty(IconPath))
+            {
+                return MagnifierGeometry;
+            }
+
+            if (!string.Equals(cachedIconPath, IconPath, StringComparison.Ordinal))
+            {
+                cachedIconPath = IconPath;
+                cachedIconGeometry = StreamGeometry.Parse(IconPath);
+            }
+
+            return cachedIconGeometry;
+        }
+
+        /// <summary>
+        /// Measures the given text with the specified typeface and font size.
+        /// </summary>
+        private static FormattedText CreateFormattedText(string text, IBrush brush, Typeface typeface, double fontSize)
+        {
+            Typeface face = typeface;
+
+            if (face.FontFamily == null)
+            {
+                face = new Typeface(FontFamily.Default, face.Style, face.Weight);
+            }
+
+            return new FormattedText(
+                text,
+                CultureInfo.CurrentCulture,
+                FlowDirection.LeftToRight,
+                face,
+                fontSize,
+                brush);
+        }
+
+        /// <summary>
+        /// Draws an already measured text inside the given rectangle, honouring the alignments
+        /// and the <see cref="Underline"/> flag, clipped to the rectangle.
+        /// </summary>
+        private void DrawAlignedText(DrawingContext context, FormattedText fmtText, Rect rect, TextAlignment horAlign, VerticalAlignment verAlign, IBrush brush)
+        {
+            double textWidth = fmtText.Width;
+            double textHeight = fmtText.Height;
+
+            double textX = rect.X + 3;
+            double textY;
+
+            if (verAlign == VerticalAlignment.Top)
+            {
+                textY = rect.Y + 1;
+            }
+            else if (verAlign == VerticalAlignment.Bottom)
+            {
+                textY = rect.Y + rect.Height - 1 - textHeight;
+            }
+            else
+            {
+                textY = rect.Y + rect.Height * 0.5 - textHeight * 0.5;
+            }
+
+            if (horAlign == TextAlignment.Center)
+            {
+                textX = rect.X + rect.Width * 0.5 - textWidth * 0.5;
+            }
+            else if (horAlign == TextAlignment.Right)
+            {
+                textX = rect.X + rect.Width - 3 - textWidth;
+            }
+
+            // Make sure the text never escapes the rectangle.
+            double left = rect.X + 3;
+            double right = rect.X + rect.Width - 3;
+            textX = Math.Max(left, Math.Min(textX, right - textWidth));
+
+            using (context.PushClip(rect))
+            {
+                context.DrawText(fmtText, new Point(textX, textY));
+
+                if (Underline)
+                {
+                    double strikeY = textY + textHeight + 0.5;
+                    context.DrawLine(new Pen(brush, 1), new Point(textX, strikeY), new Point(textX + textWidth, strikeY));
+                }
+            }
+        }
 
         /// <summary>
         /// Creates a new empty <see cref="ButtonCell"/>.
@@ -169,6 +335,12 @@ namespace Spreadalonia
                 return;
             }
 
+            if (Mode == ButtonCellMode.Icon)
+            {
+                RenderIcon(context, bounds, defaultForeground, typeface, fontSize, horAlign, verAlign, rawData);
+                return;
+            }
+
             Rect buttonBounds = bounds;
 
             if (!StretchToCell)
@@ -206,29 +378,11 @@ namespace Spreadalonia
 
             IBrush brush = Foreground ?? defaultForeground ?? Brushes.Black;
 
-            FormattedText fmtText = null;
-            double textWidth = 0;
-            double textHeight = 0;
+            FormattedText fmtText;
 
             try
             {
-                Typeface face = typeface;
-
-                if (face.FontFamily == null)
-                {
-                    face = new Typeface(FontFamily.Default, face.Style, face.Weight);
-                }
-
-                fmtText = new FormattedText(
-                    text,
-                    CultureInfo.CurrentCulture,
-                    FlowDirection.LeftToRight,
-                    face,
-                    fontSize,
-                    brush);
-
-                textWidth = fmtText.Width;
-                textHeight = fmtText.Height;
+                fmtText = CreateFormattedText(text, brush, typeface, fontSize);
             }
             catch
             {
@@ -236,48 +390,98 @@ namespace Spreadalonia
                 return;
             }
 
-            double textX = buttonBounds.X + 3;
-            double textY;
+            DrawAlignedText(context, fmtText, buttonBounds, horAlign, verAlign, brush);
 
-            if (verAlign == VerticalAlignment.Top)
-            {
-                textY = buttonBounds.Y + 1;
-            }
-            else if (verAlign == VerticalAlignment.Bottom)
-            {
-                textY = buttonBounds.Y + buttonBounds.Height - 1 - textHeight;
-            }
-            else
-            {
-                textY = buttonBounds.Y + buttonBounds.Height * 0.5 - textHeight * 0.5;
-            }
+            HitRect = buttonBounds;
+        }
 
-            if (horAlign == TextAlignment.Center)
-            {
-                textX = buttonBounds.X + buttonBounds.Width * 0.5 - textWidth * 0.5;
-            }
-            else if (horAlign == TextAlignment.Right)
-            {
-                textX = buttonBounds.X + buttonBounds.Width - 3 - textWidth;
-            }
+        /// <summary>
+        /// Renders the icon mode: the cell text is drawn normally to the left of a small icon
+        /// placed at the right edge of the cell. Only the icon is clickable, so the rest of the
+        /// cell keeps the normal spreadsheet behaviour.
+        /// </summary>
+        private void RenderIcon(DrawingContext context, Rect bounds, IBrush defaultForeground, Typeface typeface, double fontSize, TextAlignment horAlign, VerticalAlignment verAlign, string rawData)
+        {
+            double iconSize = Math.Max(8, Math.Min(IconSize, Math.Min(bounds.Width, bounds.Height)));
+            double iconX = bounds.Right - iconSize - 3;
+            double iconY = bounds.Y + (bounds.Height - iconSize) * 0.5;
+            Rect iconRect = new Rect(iconX, iconY, iconSize, iconSize);
 
-            // Make sure the text never escapes the button rectangle.
-            double left = buttonBounds.X + 3;
-            double right = buttonBounds.X + buttonBounds.Width - 3;
-            textX = Math.Max(left, Math.Min(textX, right - textWidth));
+            // The text occupies the remaining area to the left of the icon, exactly like the
+            // RefCell of the WPF project.
+            Rect textRect = new Rect(bounds.X, bounds.Y, Math.Max(0, iconRect.Left - 2 - bounds.X), bounds.Height);
 
-            using (context.PushClip(buttonBounds))
+            string text = GetDisplayText(rawData);
+
+            if (!string.IsNullOrEmpty(text) && textRect.Width > 3)
             {
-                context.DrawText(fmtText, new Point(textX, textY));
+                IBrush brush = Foreground ?? defaultForeground ?? Brushes.Black;
 
-                if (Underline)
+                FormattedText fmtText;
+
+                try
                 {
-                    double strikeY = textY + textHeight + 0.5;
-                    context.DrawLine(new Pen(brush, 1), new Point(textX, strikeY), new Point(textX + textWidth, strikeY));
+                    fmtText = CreateFormattedText(text, brush, typeface, fontSize);
+                }
+                catch
+                {
+                    fmtText = null;
+                }
+
+                if (fmtText != null)
+                {
+                    DrawAlignedText(context, fmtText, textRect, horAlign, verAlign, brush);
                 }
             }
 
-            HitRect = buttonBounds;
+            if (iconRect.Width > 0 && iconRect.Height > 0)
+            {
+                bool active = IsHovered || IsPressed;
+
+                if (active)
+                {
+                    IBrush hoverBackground = IconHoverBackground ?? new SolidColorBrush(Color.Parse("#FFE0E0E0"));
+                    context.FillRectangle(hoverBackground, iconRect);
+                }
+
+                StreamGeometry geometry = GetIconGeometry();
+
+                if (geometry != null)
+                {
+                    Rect geometryBounds = geometry.Bounds;
+
+                    if (geometryBounds.Width > 0 && geometryBounds.Height > 0)
+                    {
+                        double scale = Math.Min((iconRect.Width - 2) / geometryBounds.Width, (iconRect.Height - 2) / geometryBounds.Height);
+
+                        if (scale > 0 && !double.IsInfinity(scale))
+                        {
+                            double tx = iconRect.X + (iconRect.Width - geometryBounds.Width * scale) * 0.5 - geometryBounds.X * scale;
+                            double ty = iconRect.Y + (iconRect.Height - geometryBounds.Height * scale) * 0.5 - geometryBounds.Y * scale;
+
+                            // A single matrix combining the scale and the translation is enough:
+                            // p' = (scale * x + tx, scale * y + ty).
+                            Matrix transform = new Matrix(scale, 0, 0, scale, tx, ty);
+
+                            IBrush iconBrush = active
+                                ? (IconHoverFill ?? new SolidColorBrush(Color.Parse("#FF777777")))
+                                : (IconFill ?? new SolidColorBrush(Color.Parse("#FFCCCCCC")));
+
+                            using (context.PushTransform(transform))
+                            {
+                                context.DrawGeometry(iconBrush, null, geometry);
+                            }
+                        }
+                    }
+                }
+
+                // Only the icon is clickable; the text area behaves like a normal cell.
+                HitRect = iconRect;
+            }
+            else
+            {
+                HitRect = default;
+            }
         }
     }
 }

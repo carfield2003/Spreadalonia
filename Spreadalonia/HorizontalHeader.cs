@@ -188,7 +188,7 @@ namespace Spreadalonia
 
             if (pointerPressedAction == 2)
             {
-                double newWidth = Math.Max(10, originalColumnWidth + xPos - dragStartX);
+                double newWidth = Math.Max(10, originalColumnWidth + currentPoint.Position.X - dragStartX);
 
                 if (newWidth != originalColumnWidth)
                 {
@@ -247,6 +247,14 @@ namespace Spreadalonia
                 }
             }
 
+            // The frozen columns are drawn with their own (unscrolled) origin, so the hit test above
+            // does not describe them: resolve the column index from the frozen strip directly.
+            if (Owner != null && Owner.IsOverFrozenColumns(currentPoint.Position.X))
+            {
+                clickedColumn = Owner.GetFrozenColumnIndex(currentPoint.Position.X);
+            }
+
+
             if (clickedColumn >= 0)
             {
                 if (!currentPoint.Properties.IsLeftButtonPressed)
@@ -282,7 +290,7 @@ namespace Spreadalonia
                     }
                     else if (pointerPressedAction == 2)
                     {
-                        double newWidth = Math.Max(10, originalColumnWidth + xPos - dragStartX);
+                        double newWidth = Math.Max(10, originalColumnWidth + currentPoint.Position.X - dragStartX);
 
                         Owner.ColumnWidths[selectionStartColumn] = newWidth;
                         Owner.InvalidateVisual();
@@ -328,6 +336,14 @@ namespace Spreadalonia
                     }
                 }
             }
+
+            // The frozen columns are drawn with their own (unscrolled) origin, so the hit test above
+            // does not describe them: resolve the column index from the frozen strip directly.
+            if (Owner != null && Owner.IsOverFrozenColumns(currentPoint.Position.X))
+            {
+                clickedColumn = Owner.GetFrozenColumnIndex(currentPoint.Position.X);
+            }
+
 
             if (e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
             {
@@ -389,7 +405,13 @@ namespace Spreadalonia
                 }
                 else
                 {
-                    if (xPos - (clickedColumn > 0 ? lastDrawnXs[clickedColumn - 1] : 0) <= 5)
+                    // In the frozen strip the left edge of the column is its table coordinate: the
+                    // drawn coordinates of the scrollable slice do not apply there.
+                    double columnLeftEdge = Owner != null && Owner.IsOverFrozenColumns(currentPoint.Position.X)
+                        ? Owner.GetColumnStart(clickedColumn) - lastDrawnDelta
+                        : (clickedColumn > 0 ? lastDrawnXs[clickedColumn - 1] : 0);
+
+                    if (xPos - columnLeftEdge <= 5)
                     {
                         // Dragging the left border of a column resizes the previous *visible*
                         // column: a hidden one has no border of its own and must not be resized.
@@ -403,7 +425,10 @@ namespace Spreadalonia
                         selectionStartColumn = clickedColumn;
 
                         originalColumnWidth = Owner.GetWidth(clickedColumn, out wasOriginalColumnWidthDefault);
-                        dragStartX = xPos;
+
+                        // The drag distance is measured in screen coordinates, so that it stays
+                        // correct even when the pointer leaves the frozen column strip.
+                        dragStartX = currentPoint.Position.X;
                     }
                     else if (e.ClickCount == 2)
                     {
@@ -658,11 +683,44 @@ namespace Spreadalonia
 
             context.FillRectangle(new SolidColorBrush(this.HeaderBackground), new Rect(0, 0, this.Bounds.Width, this.Bounds.Height));
 
-            (int left, double offsetX, int top, double offsetY, int width, double actualWidth, double startWidth, int height, double actualHeight, double startHeight) = Owner.GetRange(Owner.Offset.X, Owner.Offset.Y, this.Bounds.Width, this.Bounds.Height);
+            double frozenWidth = Owner == null ? 0 : Owner.GetClampedFrozenWidth(this.Bounds.Width);
 
-            lastDrawnLeft = left;
-            lastDrawnDelta = offsetX;
+            (int top, double offsetY, int height, double actualHeight, double startHeight) = Owner.GetRangeY(Owner.Offset.Y, this.Bounds.Height);
 
+            if (frozenWidth <= 0)
+            {
+                (int left, double offsetX, int width, double actualWidth, double startWidth) = Owner.GetRangeX(Owner.Offset.X, this.Bounds.Width);
+                RenderColumns(context, left, width, offsetX, top, height, 0, this.Bounds.Width, true);
+            }
+            else
+            {
+                // Scrollable columns: they start after the frozen strip, exactly like the content area.
+                (int left, double leftDelta, int width, double actualWidth, double startWidth) = Owner.GetRangeX(Owner.Offset.X + frozenWidth, this.Bounds.Width - frozenWidth);
+                RenderColumns(context, left, width, leftDelta + frozenWidth, top, height, frozenWidth, this.Bounds.Width - frozenWidth, true);
+
+                // Frozen columns: drawn without any scroll offset, so that they stay in place.
+                (int frozenLeft, double frozenLeftDelta, int frozenColumnSpan, double frozenActualWidth, double frozenStartWidth) = Owner.GetRangeX(0, frozenWidth);
+                RenderColumns(context, frozenLeft, frozenColumnSpan, frozenLeftDelta, top, height, 0, frozenWidth, false);
+
+                context.DrawLine(this.HeaderSeparator, new Point(frozenWidth + 0.5, 0).SnapToDevicePixels(this), new Point(frozenWidth + 0.5, this.Bounds.Height).SnapToDevicePixels(this));
+            }
+        }
+
+        /// <summary>
+        /// Draws one horizontal slice of the header: either the scrollable columns or the frozen
+        /// column strip, which is drawn without the scroll offset so that it stays in place.
+        /// </summary>
+        /// <param name="context">The drawing context.</param>
+        /// <param name="left">The index of the first drawn column.</param>
+        /// <param name="width">The number of drawn columns.</param>
+        /// <param name="offsetX">The horizontal translation applied to the slice.</param>
+        /// <param name="top">The index of the first visible row (used to decide the selection style).</param>
+        /// <param name="height">The number of visible rows.</param>
+        /// <param name="regionX">The left edge of the slice, in screen coordinates.</param>
+        /// <param name="regionWidth">The width of the slice.</param>
+        /// <param name="isMainRegion"><see langword="true"/> for the scrollable slice, which owns the hit testing data.</param>
+        private void RenderColumns(DrawingContext context, int left, int width, double offsetX, int top, int height, double regionX, double regionWidth, bool isMainRegion)
+        {
             Pen gridPen = new Pen(new LinearGradientBrush() { StartPoint = new RelativePoint(0, 0, RelativeUnit.Absolute), EndPoint = new RelativePoint(0, this.Bounds.Height, RelativeUnit.Absolute), GradientStops = new GradientStops() { new GradientStop(this.HeaderBackground, 0), new GradientStop(this.GridColor, 1) } });
             IBrush brs = this.Foreground;
             Brush selectionHighlightBrush = new SolidColorBrush(Color.FromArgb(16, 0, 0, 0));
@@ -673,6 +731,7 @@ namespace Spreadalonia
             Typeface typeFace = new Typeface(this.FontFamily, this.FontStyle, this.FontWeight);
 
             using (context.PushTransform(Matrix.CreateTranslation(offsetX, 0)))
+            using (context.PushClip(new Rect(regionX - offsetX, 0, regionWidth, this.Bounds.Height)))
             {
                 double[] xs = new double[width + 1];
                 int[] selected = new int[width + 1];
@@ -718,7 +777,14 @@ namespace Spreadalonia
                     xs[x] = currX;
                 }
 
-                lastDrawnXs = xs;
+                // Only the scrollable slice publishes its coordinates: the frozen strip is resolved
+                // by the pointer handlers, which know about the frozen origin.
+                if (isMainRegion)
+                {
+                    lastDrawnXs = xs;
+                    lastDrawnLeft = left;
+                    lastDrawnDelta = offsetX;
+                }
 
                 for (int x = 0; x <= width; x++)
                 {

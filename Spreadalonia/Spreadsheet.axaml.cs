@@ -466,6 +466,19 @@ namespace Spreadalonia
         }
 
         /// <summary>
+        /// Enables or disables the smooth expand / collapse animation of tree rows. When enabled
+        /// (the default), the child rows of an expanded or collapsed tree node grow from zero
+        /// height to their actual height (or shrink to zero and fade out); collapsing rows are
+        /// only marked as hidden after they have fully collapsed. The animation is skipped
+        /// automatically when more than 1000 rows would be animated at once.
+        /// </summary>
+        public bool IsTreeAnimationEnabled
+        {
+            get { return IsInitialized && ContentTable.IsTreeAnimationEnabled; }
+            set { if (IsInitialized) { ContentTable.IsTreeAnimationEnabled = value; } }
+        }
+
+        /// <summary>
         /// Shows or hides a row.
         /// </summary>
         /// <param name="row">The row index.</param>
@@ -557,6 +570,84 @@ namespace Spreadalonia
         public void ShowRow(int row)
         {
             SetRowVisible(row, true);
+        }
+
+        /// <summary>
+        /// Gets or sets the number of columns that are frozen at the left edge of the spreadsheet.
+        /// Frozen columns are always the first <c>n</c> columns: they stay in place while the rest of
+        /// the spreadsheet scrolls horizontally, and they are separated from the scrollable area by a
+        /// thicker line. Setting this to 0 unfreezes every column. Freezing does not affect the cell
+        /// indices, the selection, the clipboard or the exported file.
+        /// </summary>
+        public int FrozenColumnCount
+        {
+            get { return IsInitialized ? ContentTable.FrozenColumnCount : 0; }
+            set
+            {
+                if (IsInitialized)
+                {
+                    ContentTable.FrozenColumnCount = value;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Gets or sets the number of rows that are frozen at the top edge of the spreadsheet. Frozen
+        /// rows are always the first <c>n</c> rows: they stay in place while the rest of the
+        /// spreadsheet scrolls vertically, and they are separated from the scrollable area by a
+        /// thicker line. Setting this to 0 unfreezes every row.
+        /// </summary>
+        public int FrozenRowCount
+        {
+            get { return IsInitialized ? ContentTable.FrozenRowCount : 0; }
+            set
+            {
+                if (IsInitialized)
+                {
+                    ContentTable.FrozenRowCount = value;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Freezes the specified number of rows and columns at the top and left edge of the
+        /// spreadsheet. Use 0 for either argument to leave that axis scrollable.
+        /// </summary>
+        /// <param name="rows">The number of frozen rows (counted from the top).</param>
+        /// <param name="columns">The number of frozen columns (counted from the left).</param>
+        public void FreezePanes(int rows, int columns)
+        {
+            if (IsInitialized)
+            {
+                ContentTable.FrozenRowCount = rows;
+                ContentTable.FrozenColumnCount = columns;
+            }
+        }
+
+        /// <summary>
+        /// Freezes the first <paramref name="rows"/> rows, leaving every column scrollable.
+        /// </summary>
+        /// <param name="rows">The number of frozen rows (counted from the top).</param>
+        public void FreezeRows(int rows)
+        {
+            FreezePanes(rows, FrozenColumnCount);
+        }
+
+        /// <summary>
+        /// Freezes the first <paramref name="columns"/> columns, leaving every row scrollable.
+        /// </summary>
+        /// <param name="columns">The number of frozen columns (counted from the left).</param>
+        public void FreezeColumns(int columns)
+        {
+            FreezePanes(FrozenRowCount, columns);
+        }
+
+        /// <summary>
+        /// Removes the frozen rows and columns, making the whole spreadsheet scrollable again.
+        /// </summary>
+        public void UnfreezePanes()
+        {
+            FreezePanes(0, 0);
         }
 
         /// <summary>
@@ -1552,14 +1643,37 @@ namespace Spreadalonia
                         editingNumericCell = numericCell;
                     }
 
-                    double left = EditingCell.Item1 - table.lastDrawnLeft > 0 ? table.lastDrawnXs[EditingCell.Item1 - table.lastDrawnLeft - 1] : 0;
-                    double top = EditingCell.Item2 - table.lastDrawnTop > 0 ? table.lastDrawnYs[EditingCell.Item2 - table.lastDrawnTop - 1] : 0;
+                    double left;
+                    double width;
 
-                    double width = table.lastDrawnXs[EditingCell.Item1 - table.lastDrawnLeft] - left;
-                    double height = table.lastDrawnYs[EditingCell.Item2 - table.lastDrawnTop] - top - 1;
+                    if (table.IsColumnFrozen(EditingCell.Item1))
+                    {
+                        // Frozen columns keep their position: they are drawn with their own origin,
+                        // so the coordinates of the scrollable area do not describe them.
+                        left = table.GetColumnScreenLeft(EditingCell.Item1);
+                        width = table.GetWidth(EditingCell.Item1);
+                    }
+                    else
+                    {
+                        left = EditingCell.Item1 - table.lastDrawnLeft > 0 ? table.lastDrawnXs[EditingCell.Item1 - table.lastDrawnLeft - 1] : 0;
+                        width = table.lastDrawnXs[EditingCell.Item1 - table.lastDrawnLeft] - left;
+                        left += table.lastDrawnDeltaX;
+                    }
 
-                    left += table.lastDrawnDeltaX;
-                    top += table.lastDrawnDeltaY;
+                    double top;
+                    double height;
+
+                    if (table.IsRowFrozen(EditingCell.Item2))
+                    {
+                        top = table.GetRowScreenTop(EditingCell.Item2);
+                        height = table.GetHeight(EditingCell.Item2) - 1;
+                    }
+                    else
+                    {
+                        top = EditingCell.Item2 - table.lastDrawnTop > 0 ? table.lastDrawnYs[EditingCell.Item2 - table.lastDrawnTop - 1] : 0;
+                        height = table.lastDrawnYs[EditingCell.Item2 - table.lastDrawnTop] - top - 1;
+                        top += table.lastDrawnDeltaY;
+                    }
 
                     if (!table.Data.TryGetValue((EditingCell.Item1, EditingCell.Item2), out string txt))
                     {
@@ -1667,12 +1781,13 @@ namespace Spreadalonia
 
                         if (newRange.Left != oldRange.Left)
                         {
-                            if (table.lastDrawnLeft > newRange.Left - 1 || table.lastDrawnLeft + table.lastDrawnWidth < newRange.Left + 3)
+                            if (!table.IsColumnFrozen(newRange.Left) && (table.lastDrawnLeft > newRange.Left - 1 || table.lastDrawnLeft + table.lastDrawnWidth < newRange.Left + 3))
                             {
                                 if (table.lastDrawnLeft > newRange.Left - 1)
                                 {
                                     SetScrollbarMaximum(Math.Max(HorizontalScrollBar.Maximum, topLeft.Right - table.Bounds.Width + 20), VerticalScrollBar.Maximum);
-                                    HorizontalScrollBar.Value = topLeft.Left;
+                                    // Scrolling left stops at the frozen strip, otherwise the cell would end up under it.
+                                    HorizontalScrollBar.Value = topLeft.Left - table.FrozenStripWidth;
                                 }
                                 else
                                 {
@@ -1683,12 +1798,13 @@ namespace Spreadalonia
                         }
                         else if (newRange.Right != oldRange.Right && (newRange.IsFinite(table) || (newRange.IsColumns(table) && !newRange.IsRows(table))))
                         {
-                            if (table.lastDrawnLeft > newRange.Right - 1 || table.lastDrawnLeft + table.lastDrawnWidth < newRange.Right + 3)
+                            if (!table.IsColumnFrozen(newRange.Right) && (table.lastDrawnLeft > newRange.Right - 1 || table.lastDrawnLeft + table.lastDrawnWidth < newRange.Right + 3))
                             {
                                 if (table.lastDrawnLeft > newRange.Right - 1)
                                 {
                                     SetScrollbarMaximum(Math.Max(HorizontalScrollBar.Maximum, bottomRight.Right - table.Bounds.Width + 20), VerticalScrollBar.Maximum);
-                                    HorizontalScrollBar.Value = bottomRight.Left;
+                                    // Scrolling left stops at the frozen strip, otherwise the cell would end up under it.
+                                    HorizontalScrollBar.Value = bottomRight.Left - table.FrozenStripWidth;
                                 }
                                 else
                                 {
@@ -1700,12 +1816,13 @@ namespace Spreadalonia
 
                         if (newRange.Top != oldRange.Top)
                         {
-                            if (table.lastDrawnTop > newRange.Top - 1 || table.lastDrawnTop + table.lastDrawnHeight < newRange.Top + 3)
+                            if (!table.IsRowFrozen(newRange.Top) && (table.lastDrawnTop > newRange.Top - 1 || table.lastDrawnTop + table.lastDrawnHeight < newRange.Top + 3))
                             {
                                 if (table.lastDrawnTop > newRange.Top - 1)
                                 {
                                     SetScrollbarMaximum(HorizontalScrollBar.Maximum, Math.Max(VerticalScrollBar.Maximum, topLeft.Bottom - table.Bounds.Height));
-                                    VerticalScrollBar.Value = topLeft.Top;
+                                    // Scrolling up stops at the frozen strip, otherwise the cell would end up under it.
+                                    VerticalScrollBar.Value = topLeft.Top - table.FrozenStripHeight;
                                 }
                                 else
                                 {
@@ -1716,12 +1833,13 @@ namespace Spreadalonia
                         }
                         else if (newRange.Bottom != oldRange.Bottom && (newRange.IsFinite(table) || (!newRange.IsColumns(table) && newRange.IsRows(table))))
                         {
-                            if (table.lastDrawnTop > newRange.Bottom - 1 || table.lastDrawnTop + table.lastDrawnHeight < newRange.Bottom + 3)
+                            if (!table.IsRowFrozen(newRange.Bottom) && (table.lastDrawnTop > newRange.Bottom - 1 || table.lastDrawnTop + table.lastDrawnHeight < newRange.Bottom + 3))
                             {
                                 if (table.lastDrawnTop > newRange.Bottom - 1)
                                 {
                                     SetScrollbarMaximum(HorizontalScrollBar.Maximum, Math.Max(VerticalScrollBar.Maximum, bottomRight.Bottom - table.Bounds.Height));
-                                    VerticalScrollBar.Value = bottomRight.Top;
+                                    // Scrolling up stops at the frozen strip, otherwise the cell would end up under it.
+                                    VerticalScrollBar.Value = bottomRight.Top - table.FrozenStripHeight;
                                 }
                                 else
                                 {
@@ -1735,12 +1853,13 @@ namespace Spreadalonia
                     {
                         if (newRange.IsFinite(table) || (newRange.IsColumns(table) && !newRange.IsRows(table)))
                         {
-                            if (table.lastDrawnLeft > newRange.Right - 1 || table.lastDrawnLeft + table.lastDrawnWidth < newRange.Right + 3)
+                            if (!table.IsColumnFrozen(newRange.Right) && (table.lastDrawnLeft > newRange.Right - 1 || table.lastDrawnLeft + table.lastDrawnWidth < newRange.Right + 3))
                             {
                                 if (table.lastDrawnLeft > newRange.Right - 1)
                                 {
                                     SetScrollbarMaximum(Math.Max(HorizontalScrollBar.Maximum, bottomRight.Right - table.Bounds.Width + 20), VerticalScrollBar.Maximum);
-                                    HorizontalScrollBar.Value = bottomRight.Left;
+                                    // Scrolling left stops at the frozen strip, otherwise the cell would end up under it.
+                                    HorizontalScrollBar.Value = bottomRight.Left - table.FrozenStripWidth;
                                 }
                                 else
                                 {
@@ -1752,12 +1871,13 @@ namespace Spreadalonia
 
                         if (newRange.IsFinite(table) || (!newRange.IsColumns(table) && newRange.IsRows(table)))
                         {
-                            if (table.lastDrawnTop > newRange.Bottom - 1 || table.lastDrawnTop + table.lastDrawnHeight < newRange.Bottom + 3)
+                            if (!table.IsRowFrozen(newRange.Bottom) && (table.lastDrawnTop > newRange.Bottom - 1 || table.lastDrawnTop + table.lastDrawnHeight < newRange.Bottom + 3))
                             {
                                 if (table.lastDrawnTop > newRange.Bottom - 1)
                                 {
                                     SetScrollbarMaximum(HorizontalScrollBar.Maximum, Math.Max(VerticalScrollBar.Maximum, bottomRight.Bottom - table.Bounds.Height));
-                                    VerticalScrollBar.Value = bottomRight.Top;
+                                    // Scrolling up stops at the frozen strip, otherwise the cell would end up under it.
+                                    VerticalScrollBar.Value = bottomRight.Top - table.FrozenStripHeight;
                                 }
                                 else
                                 {
@@ -1767,12 +1887,13 @@ namespace Spreadalonia
                             }
                         }
 
-                        if (table.lastDrawnLeft > newRange.Left - 1 || table.lastDrawnLeft + table.lastDrawnWidth < newRange.Left + 3)
+                        if (!table.IsColumnFrozen(newRange.Left) && (table.lastDrawnLeft > newRange.Left - 1 || table.lastDrawnLeft + table.lastDrawnWidth < newRange.Left + 3))
                         {
                             if (table.lastDrawnLeft > newRange.Left - 1)
                             {
                                 SetScrollbarMaximum(Math.Max(HorizontalScrollBar.Maximum, topLeft.Right - table.Bounds.Width + 20), VerticalScrollBar.Maximum);
-                                HorizontalScrollBar.Value = topLeft.Left;
+                                // Scrolling left stops at the frozen strip, otherwise the cell would end up under it.
+                                    HorizontalScrollBar.Value = topLeft.Left - table.FrozenStripWidth;
                             }
                             else
                             {
@@ -1781,12 +1902,13 @@ namespace Spreadalonia
                             }
                         }
 
-                        if (table.lastDrawnTop > newRange.Top - 1 || table.lastDrawnTop + table.lastDrawnHeight < newRange.Top + 3)
+                        if (!table.IsRowFrozen(newRange.Top) && (table.lastDrawnTop > newRange.Top - 1 || table.lastDrawnTop + table.lastDrawnHeight < newRange.Top + 3))
                         {
                             if (table.lastDrawnTop > newRange.Top - 1)
                             {
                                 SetScrollbarMaximum(HorizontalScrollBar.Maximum, Math.Max(VerticalScrollBar.Maximum, topLeft.Bottom - table.Bounds.Height));
-                                VerticalScrollBar.Value = topLeft.Top;
+                                // Scrolling up stops at the frozen strip, otherwise the cell would end up under it.
+                                    VerticalScrollBar.Value = topLeft.Top - table.FrozenStripHeight;
                             }
                             else
                             {

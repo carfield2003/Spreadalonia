@@ -528,6 +528,14 @@ namespace Spreadalonia
                 return 0;
             }
 
+            // A row that is growing / shrinking as part of a tree expand / collapse animation uses
+            // the interpolated height; this is the single source of row heights, so the whole
+            // rendering / hit testing / navigation pipeline follows the animation automatically.
+            if (animatedRowHeights.Count > 0 && animatedRowHeights.TryGetValue(rowIndex, out double animatedHeight))
+            {
+                return animatedHeight;
+            }
+
             if (!RowHeights.TryGetValue(rowIndex, out double h))
             {
                 return DefaultRowHeight;
@@ -663,12 +671,229 @@ namespace Spreadalonia
         /// </summary>
         public void ShowAllRows()
         {
+            CancelTreeRowAnimation();
+
             if (HiddenRows.Count > 0)
             {
                 HiddenRows.Clear();
                 InvalidateTreeCache();
                 this.InvalidateVisual();
             }
+        }
+
+        /// <summary>
+        /// Enables or disables the smooth expand / collapse animation of tree rows. When enabled
+        /// (the default), the child rows of an expanded or collapsed <see cref="TreeGradeCell"/>
+        /// grow from zero height to their actual height (or shrink to zero and fade out) over
+        /// <see cref="TreeAnimationDuration"/>. The animation is skipped automatically when more
+        /// than <see cref="TreeAnimationMaxRows"/> rows would be animated at once.
+        /// </summary>
+        public bool IsTreeAnimationEnabled { get; set; } = true;
+
+        /// <summary>
+        /// Duration of the tree expand / collapse animation.
+        /// </summary>
+        public TimeSpan TreeAnimationDuration { get; set; } = TimeSpan.FromMilliseconds(200);
+
+        /// <summary>
+        /// Maximum number of rows that are animated at the same time; when an expand / collapse
+        /// affects more rows than this, the final state is applied immediately instead.
+        /// </summary>
+        public int TreeAnimationMaxRows { get; set; } = 1000;
+
+        /// <summary>
+        /// A single row that is currently growing (expand) or shrinking (collapse).
+        /// </summary>
+        private sealed class TreeRowAnimation
+        {
+            public int Row;
+            public double NaturalHeight;
+            public long StartTicks;
+            public bool Collapsing;
+        }
+
+        private readonly List<TreeRowAnimation> treeRowAnimations = new List<TreeRowAnimation>();
+
+        /// <summary>The height currently interpolated for each animating row (overrides <see cref="GetHeight"/>).</summary>
+        private readonly Dictionary<int, double> animatedRowHeights = new Dictionary<int, double>();
+
+        /// <summary>The opacity currently interpolated for each animating row (used to fade the content in / out).</summary>
+        private readonly Dictionary<int, double> animatedRowOpacity = new Dictionary<int, double>();
+
+        private Avalonia.Threading.DispatcherTimer treeAnimationTimer;
+        private System.Diagnostics.Stopwatch treeAnimationStopwatch;
+
+        /// <summary>
+        /// Starts a height animation for the specified rows. Collapsing rows keep their index and
+        /// stay visible until they have fully shrunk; only then are they added to
+        /// <see cref="HiddenRows"/>, so that they shrink smoothly instead of disappearing at once.
+        /// </summary>
+        /// <param name="rows">The rows to animate.</param>
+        /// <param name="collapsing"><see langword="true"/> to shrink the rows to zero height, <see langword="false"/> to grow them from zero height.</param>
+        private void StartTreeRowAnimation(List<int> rows, bool collapsing)
+        {
+            if (rows == null || rows.Count == 0)
+            {
+                return;
+            }
+
+            // Animating thousands of rows would only waste CPU: apply the final state immediately.
+            if (rows.Count > Math.Max(0, TreeAnimationMaxRows))
+            {
+                if (collapsing)
+                {
+                    foreach (int row in rows)
+                    {
+                        HiddenRows.Add(row);
+                    }
+
+                    InvalidateTreeCache();
+                }
+
+                return;
+            }
+
+            long startTicks = GetTreeAnimationStopwatch().ElapsedMilliseconds;
+
+            foreach (int row in rows)
+            {
+                double naturalHeight = GetNaturalRowHeight(row);
+
+                treeRowAnimations.RemoveAll(a => a.Row == row);
+
+                animatedRowHeights[row] = collapsing ? naturalHeight : 0;
+                animatedRowOpacity[row] = collapsing ? 1 : 0;
+
+                treeRowAnimations.Add(new TreeRowAnimation() { Row = row, NaturalHeight = naturalHeight, StartTicks = startTicks, Collapsing = collapsing });
+            }
+
+            if (treeAnimationTimer == null)
+            {
+                treeAnimationTimer = new Avalonia.Threading.DispatcherTimer(TimeSpan.FromMilliseconds(16), Avalonia.Threading.DispatcherPriority.Render, TreeAnimationTick);
+            }
+
+            treeAnimationTimer.Start();
+
+            this.InvalidateVisual();
+            this.InvalidateHeaders();
+        }
+
+        /// <summary>
+        /// Lazily creates the shared stopwatch used to measure the animation progress.
+        /// </summary>
+        private System.Diagnostics.Stopwatch GetTreeAnimationStopwatch()
+        {
+            if (treeAnimationStopwatch == null)
+            {
+                treeAnimationStopwatch = System.Diagnostics.Stopwatch.StartNew();
+            }
+
+            return treeAnimationStopwatch;
+        }
+
+        /// <summary>
+        /// Advances every running animation by one frame and repaints the table and the headers.
+        /// </summary>
+        private void TreeAnimationTick(object sender, EventArgs e)
+        {
+            if (treeRowAnimations.Count == 0)
+            {
+                treeAnimationTimer.Stop();
+                return;
+            }
+
+            double durationMs = Math.Max(1, TreeAnimationDuration.TotalMilliseconds);
+            long nowMs = GetTreeAnimationStopwatch().ElapsedMilliseconds;
+
+            for (int i = treeRowAnimations.Count - 1; i >= 0; i--)
+            {
+                TreeRowAnimation animation = treeRowAnimations[i];
+                double t = (nowMs - animation.StartTicks) / durationMs;
+
+                if (t >= 1)
+                {
+                    FinishTreeRowAnimation(animation);
+                    continue;
+                }
+
+                // Ease-out quad: fast at the beginning, slowing down towards the end.
+                double eased = 1 - (1 - t) * (1 - t);
+
+                animatedRowHeights[animation.Row] = animation.NaturalHeight * eased;
+                animatedRowOpacity[animation.Row] = eased;
+            }
+
+            this.InvalidateVisual();
+            this.InvalidateHeaders();
+
+            if (treeRowAnimations.Count == 0)
+            {
+                treeAnimationTimer.Stop();
+            }
+        }
+
+        /// <summary>
+        /// Applies the final state of one animation: shrinking rows are added to
+        /// <see cref="HiddenRows"/> only now, after they have fully collapsed.
+        /// </summary>
+        private void FinishTreeRowAnimation(TreeRowAnimation animation)
+        {
+            treeRowAnimations.Remove(animation);
+            animatedRowHeights.Remove(animation.Row);
+            animatedRowOpacity.Remove(animation.Row);
+
+            if (animation.Collapsing)
+            {
+                HiddenRows.Add(animation.Row);
+                InvalidateTreeCache();
+            }
+        }
+
+        /// <summary>
+        /// Instantly completes every running animation, applying their final states. Used when a
+        /// new expand / collapse starts while another one is still running, so that the effects
+        /// never fight over the same rows.
+        /// </summary>
+        private void CompleteTreeRowAnimations()
+        {
+            if (treeRowAnimations.Count == 0)
+            {
+                return;
+            }
+
+            for (int i = treeRowAnimations.Count - 1; i >= 0; i--)
+            {
+                FinishTreeRowAnimation(treeRowAnimations[i]);
+            }
+
+            animatedRowHeights.Clear();
+            animatedRowOpacity.Clear();
+            treeAnimationTimer?.Stop();
+        }
+
+        /// <summary>
+        /// Discards every running animation without applying their final states (used when all rows
+        /// are shown again, which must not re-hide the rows that were still collapsing).
+        /// </summary>
+        private void CancelTreeRowAnimation()
+        {
+            treeRowAnimations.Clear();
+            animatedRowHeights.Clear();
+            animatedRowOpacity.Clear();
+            treeAnimationTimer?.Stop();
+        }
+
+        /// <summary>
+        /// Returns the height of the specified row ignoring any running animation.
+        /// </summary>
+        private double GetNaturalRowHeight(int row)
+        {
+            if (RowHeights.TryGetValue(row, out double h))
+            {
+                return h;
+            }
+
+            return DefaultRowHeight;
         }
 
         /// <summary>
@@ -816,6 +1041,362 @@ namespace Spreadalonia
             }
 
             return max;
+        }
+
+        /// <summary>
+        /// The smallest amount of scrollable space (in pixels) that is kept visible next to a frozen
+        /// strip: the frozen area is never allowed to cover the whole viewport.
+        /// </summary>
+        private const double MinimumScrollableArea = 40;
+
+        private int frozenColumnCount = 0;
+        private int frozenRowCount = 0;
+
+        private double frozenStripWidth = 0;
+        private double frozenStripHeight = 0;
+
+        /// <summary>
+        /// Gets the width of the frozen column strip as it was last drawn. The value is clamped so
+        /// that a scrollable area always remains visible; it is 0 when no column is frozen.
+        /// </summary>
+        internal double FrozenStripWidth => frozenStripWidth;
+
+        /// <summary>
+        /// Gets the height of the frozen row strip as it was last drawn. The value is clamped so
+        /// that a scrollable area always remains visible; it is 0 when no row is frozen.
+        /// </summary>
+        internal double FrozenStripHeight => frozenStripHeight;
+
+        /// <summary>
+        /// Gets or sets the number of columns that are frozen at the left edge of the table. Frozen
+        /// columns are always the first <c>n</c> columns: they keep their position while the rest of
+        /// the table scrolls horizontally, and they are separated from the scrollable area by a
+        /// thicker line. Setting this to 0 unfreezes every column.
+        /// </summary>
+        public int FrozenColumnCount
+        {
+            get { return frozenColumnCount; }
+            set
+            {
+                int newValue = Math.Max(0, value);
+
+                if (frozenColumnCount != newValue)
+                {
+                    frozenColumnCount = newValue;
+                    this.InvalidateVisual();
+                    this.InvalidateHeaders();
+                }
+            }
+        }
+
+        /// <summary>
+        /// Gets or sets the number of rows that are frozen at the top edge of the table. Frozen rows
+        /// are always the first <c>n</c> rows: they keep their position while the rest of the table
+        /// scrolls vertically, and they are separated from the scrollable area by a thicker line.
+        /// Setting this to 0 unfreezes every row.
+        /// </summary>
+        public int FrozenRowCount
+        {
+            get { return frozenRowCount; }
+            set
+            {
+                int newValue = Math.Max(0, value);
+
+                if (frozenRowCount != newValue)
+                {
+                    frozenRowCount = newValue;
+                    this.InvalidateVisual();
+                    this.InvalidateHeaders();
+                }
+            }
+        }
+
+        /// <summary>
+        /// Computes the total width of the frozen columns (0 when no column is frozen).
+        /// </summary>
+        private double ComputeFrozenWidth()
+        {
+            if (frozenColumnCount <= 0)
+            {
+                return 0;
+            }
+
+            double width = 0;
+
+            for (int i = 0; i < frozenColumnCount && i < MaxTableWidth; i++)
+            {
+                width += GetWidth(i);
+            }
+
+            return width;
+        }
+
+        /// <summary>
+        /// Computes the total height of the frozen rows (0 when no row is frozen).
+        /// </summary>
+        private double ComputeFrozenHeight()
+        {
+            if (frozenRowCount <= 0)
+            {
+                return 0;
+            }
+
+            double height = 0;
+
+            for (int i = 0; i < frozenRowCount && i < MaxTableHeight; i++)
+            {
+                height += GetHeight(i);
+            }
+
+            return height;
+        }
+
+        /// <summary>
+        /// Returns the width of the frozen column strip, clamped so that a scrollable area of at
+        /// least <see cref="MinimumScrollableArea"/> pixels always remains visible.
+        /// </summary>
+        /// <param name="viewWidth">The width of the viewport.</param>
+        internal double GetClampedFrozenWidth(double viewWidth)
+        {
+            double width = ComputeFrozenWidth();
+            double max = viewWidth - MinimumScrollableArea;
+
+            if (max <= 0)
+            {
+                return 0;
+            }
+
+            return width > max ? max : width;
+        }
+
+        /// <summary>
+        /// Returns the height of the frozen row strip, clamped so that a scrollable area of at least
+        /// <see cref="MinimumScrollableArea"/> pixels always remains visible.
+        /// </summary>
+        /// <param name="viewHeight">The height of the viewport.</param>
+        internal double GetClampedFrozenHeight(double viewHeight)
+        {
+            double height = ComputeFrozenHeight();
+            double max = viewHeight - MinimumScrollableArea;
+
+            if (max <= 0)
+            {
+                return 0;
+            }
+
+            return height > max ? max : height;
+        }
+
+        /// <summary>
+        /// Checks whether the specified column belongs to the frozen strip.
+        /// </summary>
+        internal bool IsColumnFrozen(int column)
+        {
+            return frozenStripWidth > 0 && column >= 0 && column < frozenColumnCount;
+        }
+
+        /// <summary>
+        /// Checks whether the specified row belongs to the frozen strip.
+        /// </summary>
+        internal bool IsRowFrozen(int row)
+        {
+            return frozenStripHeight > 0 && row >= 0 && row < frozenRowCount;
+        }
+
+        /// <summary>
+        /// Checks whether a screen (viewport) coordinate lies over the frozen column strip.
+        /// </summary>
+        internal bool IsOverFrozenColumns(double screenX)
+        {
+            return frozenStripWidth > 0 && screenX >= 0 && screenX < frozenStripWidth;
+        }
+
+        /// <summary>
+        /// Checks whether a screen (viewport) coordinate lies over the frozen row strip.
+        /// </summary>
+        internal bool IsOverFrozenRows(double screenY)
+        {
+            return frozenStripHeight > 0 && screenY >= 0 && screenY < frozenStripHeight;
+        }
+
+        /// <summary>
+        /// Converts a screen (viewport) coordinate into the horizontal drawing coordinate of the
+        /// region that is currently under it. The frozen strip uses its own (unscrolled) origin, so
+        /// a pointer position over it has to be translated differently.
+        /// </summary>
+        internal double GetDrawnX(double screenX)
+        {
+            return IsOverFrozenColumns(screenX) ? screenX + 1 : screenX - lastDrawnDeltaX;
+        }
+
+        /// <summary>
+        /// Converts a screen (viewport) coordinate into the vertical drawing coordinate of the region
+        /// that is currently under it.
+        /// </summary>
+        internal double GetDrawnY(double screenY)
+        {
+            return IsOverFrozenRows(screenY) ? screenY + 1 : screenY - lastDrawnDeltaY;
+        }
+
+        /// <summary>
+        /// Returns the index of the frozen column that contains the specified screen coordinate.
+        /// </summary>
+        internal int GetFrozenColumnIndex(double screenX)
+        {
+            double x = screenX + 1;
+            double curr = 0;
+
+            for (int i = 0; i < frozenColumnCount; i++)
+            {
+                // A hidden frozen column has a width of zero, so it can never contain the pointer.
+                curr += GetWidth(i);
+
+                if (x < curr)
+                {
+                    return i;
+                }
+            }
+
+            return Math.Max(0, frozenColumnCount - 1);
+        }
+
+        /// <summary>
+        /// Returns the index of the frozen row that contains the specified screen coordinate.
+        /// </summary>
+        internal int GetFrozenRowIndex(double screenY)
+        {
+            double y = screenY + 1;
+            double curr = 0;
+
+            for (int i = 0; i < frozenRowCount; i++)
+            {
+                curr += GetHeight(i);
+
+                if (y < curr)
+                {
+                    return i;
+                }
+            }
+
+            return Math.Max(0, frozenRowCount - 1);
+        }
+
+        /// <summary>
+        /// Returns the table coordinate of the left edge of the specified column.
+        /// </summary>
+        internal double GetColumnStart(int column)
+        {
+            double x = 0;
+
+            for (int i = 0; i < column; i++)
+            {
+                x += GetWidth(i);
+            }
+
+            return x;
+        }
+
+        /// <summary>
+        /// Returns the table coordinate of the top edge of the specified row.
+        /// </summary>
+        internal double GetRowStart(int row)
+        {
+            double y = 0;
+
+            for (int i = 0; i < row; i++)
+            {
+                y += GetHeight(i);
+            }
+
+            return y;
+        }
+
+        /// <summary>
+        /// Returns the screen (viewport) coordinate of the left edge of the specified column, taking
+        /// the frozen strip into account.
+        /// </summary>
+        internal double GetColumnScreenLeft(int column)
+        {
+            double start = GetColumnStart(column);
+
+            return (IsColumnFrozen(column) ? start : start - this.Offset.X) - 1;
+        }
+
+        /// <summary>
+        /// Returns the screen (viewport) coordinate of the top edge of the specified row, taking the
+        /// frozen strip into account.
+        /// </summary>
+        internal double GetRowScreenTop(int row)
+        {
+            double start = GetRowStart(row);
+
+            return (IsRowFrozen(row) ? start : start - this.Offset.Y) - 1;
+        }
+
+        /// <summary>
+        /// Returns the left or right edge of the specified column in drawing coordinates, or
+        /// <see cref="double.NegativeInfinity"/> / <see cref="double.PositiveInfinity"/> when the
+        /// column has been scrolled out of the scrollable region. Frozen columns are resolved from
+        /// the frozen strip, which uses its own (unscrolled) coordinate origin.
+        /// </summary>
+        /// <param name="column">The column index.</param>
+        /// <param name="leftEdge"><see langword="true"/> to return the left edge, <see langword="false"/> for the right edge.</param>
+        internal double GetSelectionColumnEdge(int column, bool leftEdge)
+        {
+            // A frozen column is never part of the scrollable region, hence its edges are the same
+            // as in the frozen strip: they do not move with the scroll offset.
+            if (IsColumnFrozen(column))
+            {
+                double frozenStart = GetColumnStart(column);
+
+                return leftEdge ? frozenStart : frozenStart + GetWidth(column);
+            }
+
+            if (column >= lastDrawnLeft && column <= lastDrawnLeft + lastDrawnWidth)
+            {
+                if (leftEdge)
+                {
+                    return column == lastDrawnLeft ? 0 : lastDrawnXs[column - lastDrawnLeft - 1];
+                }
+                else
+                {
+                    return lastDrawnXs[column - lastDrawnLeft];
+                }
+            }
+
+            return column < lastDrawnLeft ? double.NegativeInfinity : double.PositiveInfinity;
+        }
+
+        /// <summary>
+        /// Returns the top or bottom edge of the specified row in drawing coordinates, or
+        /// <see cref="double.NegativeInfinity"/> / <see cref="double.PositiveInfinity"/> when the row
+        /// has been scrolled out of the scrollable region. Frozen rows are resolved from the frozen
+        /// strip, which uses its own (unscrolled) coordinate origin.
+        /// </summary>
+        /// <param name="row">The row index.</param>
+        /// <param name="topEdge"><see langword="true"/> to return the top edge, <see langword="false"/> for the bottom edge.</param>
+        internal double GetSelectionRowEdge(int row, bool topEdge)
+        {
+            if (IsRowFrozen(row))
+            {
+                double frozenStart = GetRowStart(row);
+
+                return topEdge ? frozenStart : frozenStart + GetHeight(row);
+            }
+
+            if (row >= lastDrawnTop && row <= lastDrawnTop + lastDrawnHeight)
+            {
+                if (topEdge)
+                {
+                    return row == lastDrawnTop ? 0 : lastDrawnYs[row - lastDrawnTop - 1];
+                }
+                else
+                {
+                    return lastDrawnYs[row - lastDrawnTop];
+                }
+            }
+
+            return row < lastDrawnTop ? double.NegativeInfinity : double.PositiveInfinity;
         }
 
         /// <summary>
@@ -1094,11 +1675,17 @@ namespace Spreadalonia
                 return;
             }
 
+            // A new expand / collapse supersedes one that is still running: snap the previous one
+            // to its final state first, so that both never fight over the same rows.
+            CompleteTreeRowAnimations();
+
             int level = cell.Level;
             int limit = Math.Min(MaxTableHeight, GetLastUsedRow() + 1);
 
             if (!expanded)
             {
+                List<int> animatedRows = null;
+
                 for (int r = row + 1; r <= limit; r++)
                 {
                     if (!TreeCells.TryGetValue((TreeColumn(r), r), out TreeGradeCell child) || child == null || child.Level <= level)
@@ -1106,11 +1693,31 @@ namespace Spreadalonia
                         break;
                     }
 
-                    HiddenRows.Add(r);
+                    if (IsRowHidden(r))
+                    {
+                        // Already hidden (a collapsed deeper node): there is nothing to animate.
+                        continue;
+                    }
+
+                    if (IsTreeAnimationEnabled)
+                    {
+                        animatedRows ??= new List<int>();
+                        animatedRows.Add(r);
+                    }
+                    else
+                    {
+                        HiddenRows.Add(r);
+                    }
+                }
+
+                if (animatedRows != null)
+                {
+                    StartTreeRowAnimation(animatedRows, true);
                 }
             }
             else
             {
+                List<int> animatedRows = null;
                 bool childExpanded = true;
 
                 for (int r = row + 1; r <= limit; r++)
@@ -1122,18 +1729,41 @@ namespace Spreadalonia
 
                     if (child.Level == level + 1)
                     {
-                        HiddenRows.Remove(r);
+                        ShowTreeRowAnimated(r, ref animatedRows);
                         childExpanded = child.IsExpanded;
                     }
                     else if (childExpanded)
                     {
-                        HiddenRows.Remove(r);
+                        ShowTreeRowAnimated(r, ref animatedRows);
                     }
+                }
+
+                if (animatedRows != null)
+                {
+                    StartTreeRowAnimation(animatedRows, false);
                 }
             }
 
             InvalidateTreeCache();
             this.InvalidateVisual();
+        }
+
+        /// <summary>
+        /// Shows a single row as part of a tree expand: if it was hidden and the animation is
+        /// enabled it grows from zero height instead of appearing at once.
+        /// </summary>
+        /// <param name="row">The row to show.</param>
+        /// <param name="animatedRows">The list collecting the rows to animate (lazily created).</param>
+        private void ShowTreeRowAnimated(int row, ref List<int> animatedRows)
+        {
+            bool wasHidden = HiddenRows.Contains(row);
+            HiddenRows.Remove(row);
+
+            if (wasHidden && IsTreeAnimationEnabled)
+            {
+                animatedRows ??= new List<int>();
+                animatedRows.Add(row);
+            }
         }
 
         protected override void OnKeyDown(KeyEventArgs e)
@@ -1204,12 +1834,43 @@ namespace Spreadalonia
         protected override void OnPointerMoved(PointerEventArgs e)
         {
             PointerPoint currentPoint = e.GetCurrentPoint(this);
-            double xPos = currentPoint.Position.X - lastDrawnDeltaX;
-            double yPos = currentPoint.Position.Y - lastDrawnDeltaY;
+            // The frozen strips are drawn with their own (unscrolled) origin, so a pointer position
+            // over them has to be translated using that origin instead of the scroll offset.
+            double xPos = GetDrawnX(currentPoint.Position.X);
+            double yPos = GetDrawnY(currentPoint.Position.Y);
 
 
             if (!currentPoint.Properties.IsLeftButtonPressed && !currentPoint.Properties.IsRightButtonPressed)
             {
+                // Track the hover state of button cells: in icon mode the icon at the right edge
+                // of the cell is highlighted while the pointer is over it (RefCell behaviour).
+                // This runs before the early returns below so that the state stays consistent.
+                if (TryHitButtonCell(xPos, yPos, out ButtonCell hoveredButton, out _))
+                {
+                    this.Cursor = HandCursor;
+
+                    if (!ReferenceEquals(hoveredButtonCell, hoveredButton))
+                    {
+                        if (hoveredButtonCell != null)
+                        {
+                            hoveredButtonCell.IsHovered = false;
+                        }
+
+                        hoveredButtonCell = hoveredButton;
+                        hoveredButtonCell.IsHovered = true;
+                        this.InvalidateVisual();
+                    }
+
+                    return;
+                }
+
+                if (hoveredButtonCell != null)
+                {
+                    hoveredButtonCell.IsHovered = false;
+                    hoveredButtonCell = null;
+                    this.InvalidateVisual();
+                }
+
                 // Hovering over the +/- box of a tree cell shows a hand cursor.
                 if (TryHitTreeBox(xPos, yPos, out TreeGradeCell hoveredTree, out _))
                 {
@@ -1224,12 +1885,6 @@ namespace Spreadalonia
                     return;
                 }
 
-                // Hovering over a button cell shows a hand cursor.
-                if (TryHitButtonCell(xPos, yPos, out ButtonCell hoveredButton, out _))
-                {
-                    this.Cursor = HandCursor;
-                    return;
-                }
 
                 if (Selection.Count == 1)
                 {
@@ -1238,57 +1893,12 @@ namespace Spreadalonia
                     double selectionRight = 0;
                     double selectionBottom = 0;
 
-                    if (Selection[0].Left >= lastDrawnLeft && Selection[0].Left <= lastDrawnLeft + lastDrawnWidth)
-                    {
-                        selectionLeft = Selection[0].Left == lastDrawnLeft ? 0 : lastDrawnXs[Selection[0].Left - lastDrawnLeft - 1];
-                    }
-                    else if (Selection[0].Left < lastDrawnLeft)
-                    {
-                        selectionLeft = double.NegativeInfinity;
-                    }
-                    else if (Selection[0].Left > lastDrawnLeft + lastDrawnWidth)
-                    {
-                        selectionLeft = double.PositiveInfinity;
-                    }
-
-                    if (Selection[0].Right >= lastDrawnLeft && Selection[0].Right <= lastDrawnLeft + lastDrawnWidth)
-                    {
-                        selectionRight = lastDrawnXs[Selection[0].Right - lastDrawnLeft];
-                    }
-                    else if (Selection[0].Right < lastDrawnLeft)
-                    {
-                        selectionRight = double.NegativeInfinity;
-                    }
-                    else if (Selection[0].Right > lastDrawnLeft + lastDrawnWidth)
-                    {
-                        selectionRight = double.PositiveInfinity;
-                    }
-
-                    if (Selection[0].Top >= lastDrawnTop && Selection[0].Top <= lastDrawnTop + lastDrawnHeight)
-                    {
-                        selectionTop = Selection[0].Top == lastDrawnTop ? 0 : lastDrawnYs[Selection[0].Top - lastDrawnTop - 1];
-                    }
-                    else if (Selection[0].Top < lastDrawnTop)
-                    {
-                        selectionTop = double.NegativeInfinity;
-                    }
-                    else if (Selection[0].Top > lastDrawnTop + lastDrawnHeight)
-                    {
-                        selectionTop = double.PositiveInfinity;
-                    }
-
-                    if (Selection[0].Bottom >= lastDrawnTop && Selection[0].Bottom <= lastDrawnTop + lastDrawnHeight)
-                    {
-                        selectionBottom = lastDrawnYs[Selection[0].Bottom - lastDrawnTop];
-                    }
-                    else if (Selection[0].Bottom < lastDrawnTop)
-                    {
-                        selectionBottom = double.NegativeInfinity;
-                    }
-                    else if (Selection[0].Bottom > lastDrawnTop + lastDrawnHeight)
-                    {
-                        selectionBottom = double.PositiveInfinity;
-                    }
+                    // The frozen strips are drawn with their own origin, so the edges of a frozen
+                    // column or row have to be resolved from there instead of the scrollable region.
+                    selectionLeft = GetSelectionColumnEdge(Selection[0].Left, true);
+                    selectionRight = GetSelectionColumnEdge(Selection[0].Right, false);
+                    selectionTop = GetSelectionRowEdge(Selection[0].Top, true);
+                    selectionBottom = GetSelectionRowEdge(Selection[0].Bottom, false);
 
                     bool found = (Math.Abs(xPos - selectionLeft) <= 3 && yPos >= selectionTop && yPos <= selectionBottom) || (Math.Abs(xPos - selectionRight) <= 3 && yPos >= selectionTop && yPos <= selectionBottom) ||
                         (Math.Abs(yPos - selectionTop) <= 3 && xPos >= selectionLeft && xPos <= selectionRight) || (Math.Abs(yPos - selectionBottom) <= 3 && xPos >= selectionLeft && xPos <= selectionRight);
@@ -1383,6 +1993,21 @@ namespace Spreadalonia
                     }
                 }
 
+                // The frozen strips are drawn with their own coordinate origin, so the slot indices
+                // computed above do not describe them: resolve the absolute cell indices instead.
+                int columnIndex = x + lastDrawnLeft;
+                int rowIndex = y + lastDrawnTop;
+
+                if (IsOverFrozenColumns(currentPoint.Position.X))
+                {
+                    columnIndex = GetFrozenColumnIndex(currentPoint.Position.X);
+                }
+
+                if (IsOverFrozenRows(currentPoint.Position.Y))
+                {
+                    rowIndex = GetFrozenRowIndex(currentPoint.Position.Y);
+                }
+
                 bool shiftPressed = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
 
                 if (shiftPressed != mouseMoveShiftPressed)
@@ -1417,18 +2042,18 @@ namespace Spreadalonia
                     {
                         if (selectionMode == 0)
                         {
-                            this.Container.Selection = this.Container.Selection.SetItem(this.Container.Selection.Count - 1, new SelectionRange(Math.Min(x + lastDrawnLeft, selectionStart.Item1), Math.Min(y + lastDrawnTop, selectionStart.Item2), Math.Max(x + lastDrawnLeft, selectionStart.Item1), Math.Max(y + lastDrawnTop, selectionStart.Item2)));
+                            this.Container.Selection = this.Container.Selection.SetItem(this.Container.Selection.Count - 1, new SelectionRange(Math.Min(columnIndex, selectionStart.Item1), Math.Min(rowIndex, selectionStart.Item2), Math.Max(columnIndex, selectionStart.Item1), Math.Max(rowIndex, selectionStart.Item2)));
                         }
                         else if (selectionMode == 1)
                         {
-                            this.Container.Selection = previousSelection.Difference(new SelectionRange(Math.Min(x + lastDrawnLeft, selectionStart.Item1), Math.Min(y + lastDrawnTop, selectionStart.Item2), Math.Max(x + lastDrawnLeft, selectionStart.Item1), Math.Max(y + lastDrawnTop, selectionStart.Item2)));
+                            this.Container.Selection = previousSelection.Difference(new SelectionRange(Math.Min(columnIndex, selectionStart.Item1), Math.Min(rowIndex, selectionStart.Item2), Math.Max(columnIndex, selectionStart.Item1), Math.Max(rowIndex, selectionStart.Item2)));
                         }
                     }
                     else if (pointerPressedAction == 2)
                     {
                         if (selectionBeingMoved.IsFinite(this))
                         {
-                            (int, int) newSelectionMoveDelta = (Math.Max(-selectionStart.Item1 + x + lastDrawnLeft, -selectionBeingMoved.Left), Math.Max(-selectionStart.Item2 + y + lastDrawnTop, -selectionBeingMoved.Top));
+                            (int, int) newSelectionMoveDelta = (Math.Max(-selectionStart.Item1 + columnIndex, -selectionBeingMoved.Left), Math.Max(-selectionStart.Item2 + rowIndex, -selectionBeingMoved.Top));
 
                             if (newSelectionMoveDelta != selectionMoveDelta)
                             {
@@ -1438,7 +2063,7 @@ namespace Spreadalonia
                         }
                         else if (selectionBeingMoved.IsRows(this) && !selectionBeingMoved.IsColumns(this))
                         {
-                            (int, int) newSelectionMoveDelta = (0, Math.Max(-selectionStart.Item2 + y + lastDrawnTop, -selectionBeingMoved.Top));
+                            (int, int) newSelectionMoveDelta = (0, Math.Max(-selectionStart.Item2 + rowIndex, -selectionBeingMoved.Top));
 
                             if (newSelectionMoveDelta != selectionMoveDelta)
                             {
@@ -1448,7 +2073,7 @@ namespace Spreadalonia
                         }
                         else if (selectionBeingMoved.IsColumns(this) && !selectionBeingMoved.IsRows(this))
                         {
-                            (int, int) newSelectionMoveDelta = (Math.Max(-selectionStart.Item1 + x + lastDrawnLeft, -selectionBeingMoved.Left), 0);
+                            (int, int) newSelectionMoveDelta = (Math.Max(-selectionStart.Item1 + columnIndex, -selectionBeingMoved.Left), 0);
 
                             if (newSelectionMoveDelta != selectionMoveDelta)
                             {
@@ -1461,7 +2086,7 @@ namespace Spreadalonia
                     {
                         if (selectionBeingMoved.IsFinite(this))
                         {
-                            (int, int) newSelectionMoveDelta = (Math.Max(-selectionStart.Item1 + x + lastDrawnLeft, -selectionBeingMoved.Left - selectionBeingMoved.Width), Math.Max(-selectionStart.Item2 + y + lastDrawnTop, -selectionBeingMoved.Top - selectionBeingMoved.Height));
+                            (int, int) newSelectionMoveDelta = (Math.Max(-selectionStart.Item1 + columnIndex, -selectionBeingMoved.Left - selectionBeingMoved.Width), Math.Max(-selectionStart.Item2 + rowIndex, -selectionBeingMoved.Top - selectionBeingMoved.Height));
 
                             if (newSelectionMoveDelta != selectionMoveDelta)
                             {
@@ -1471,7 +2096,7 @@ namespace Spreadalonia
                         }
                         else if (selectionBeingMoved.IsRows(this) && !selectionBeingMoved.IsColumns(this))
                         {
-                            (int, int) newSelectionMoveDelta = (0, Math.Max(-selectionStart.Item2 + y + lastDrawnTop, -selectionBeingMoved.Top - selectionBeingMoved.Height));
+                            (int, int) newSelectionMoveDelta = (0, Math.Max(-selectionStart.Item2 + rowIndex, -selectionBeingMoved.Top - selectionBeingMoved.Height));
 
                             if (newSelectionMoveDelta != selectionMoveDelta)
                             {
@@ -1481,7 +2106,7 @@ namespace Spreadalonia
                         }
                         else if (selectionBeingMoved.IsColumns(this) && !selectionBeingMoved.IsRows(this))
                         {
-                            (int, int) newSelectionMoveDelta = (Math.Max(-selectionStart.Item1 + x + lastDrawnLeft, -selectionBeingMoved.Left - selectionBeingMoved.Width), 0);
+                            (int, int) newSelectionMoveDelta = (Math.Max(-selectionStart.Item1 + columnIndex, -selectionBeingMoved.Left - selectionBeingMoved.Width), 0);
 
                             if (newSelectionMoveDelta != selectionMoveDelta)
                             {
@@ -1503,8 +2128,10 @@ namespace Spreadalonia
             if (pressedLinkCell != null)
             {
                 PointerPoint currentPoint = e.GetCurrentPoint(this);
-                double xPos = currentPoint.Position.X - lastDrawnDeltaX;
-                double yPos = currentPoint.Position.Y - lastDrawnDeltaY;
+                // The frozen strips are drawn with their own (unscrolled) origin, so a pointer
+                // position over them has to be translated using that origin instead of the offset.
+                double xPos = GetDrawnX(currentPoint.Position.X);
+                double yPos = GetDrawnY(currentPoint.Position.Y);
 
                 LinkCell releasedLink = pressedLinkCell;
                 (int, int) releasedLinkKey = pressedLinkCellKey;
@@ -1525,8 +2152,10 @@ namespace Spreadalonia
             if (pressedButtonCell != null)
             {
                 PointerPoint currentPoint = e.GetCurrentPoint(this);
-                double xPos = currentPoint.Position.X - lastDrawnDeltaX;
-                double yPos = currentPoint.Position.Y - lastDrawnDeltaY;
+                // The frozen strips are drawn with their own (unscrolled) origin, so a pointer
+                // position over them has to be translated using that origin instead of the offset.
+                double xPos = GetDrawnX(currentPoint.Position.X);
+                double yPos = GetDrawnY(currentPoint.Position.Y);
 
                 ButtonCell releasedButton = pressedButtonCell;
                 (int, int) releasedButtonKey = pressedButtonCellKey;
@@ -1745,6 +2374,7 @@ namespace Spreadalonia
         (int, int) pressedLinkCellKey = (-1, -1);
         ButtonCell pressedButtonCell = null;
         (int, int) pressedButtonCellKey = (-1, -1);
+        ButtonCell hoveredButtonCell = null;
         private static readonly Cursor HandCursor = new Cursor(StandardCursorType.Hand);
 
         /// <summary>
@@ -1775,6 +2405,21 @@ namespace Spreadalonia
             }
 
             return false;
+        }
+
+        /// <summary>
+        /// Clears the hover state of a button cell when the pointer leaves the table.
+        /// </summary>
+        protected override void OnPointerExited(PointerEventArgs e)
+        {
+            if (hoveredButtonCell != null)
+            {
+                hoveredButtonCell.IsHovered = false;
+                hoveredButtonCell = null;
+                this.InvalidateVisual();
+            }
+
+            base.OnPointerExited(e);
         }
 
         /// <summary>
@@ -1887,8 +2532,10 @@ namespace Spreadalonia
             base.OnPointerPressed(e);
 
             PointerPoint currentPoint = e.GetCurrentPoint(this);
-            double xPos = currentPoint.Position.X - lastDrawnDeltaX;
-            double yPos = currentPoint.Position.Y - lastDrawnDeltaY;
+            // The frozen strips are drawn with their own (unscrolled) origin, so a pointer position
+            // over them has to be translated using that origin instead of the scroll offset.
+            double xPos = GetDrawnX(currentPoint.Position.X);
+            double yPos = GetDrawnY(currentPoint.Position.Y);
 
             bool moving = false;
             bool fill = false;
@@ -1900,57 +2547,12 @@ namespace Spreadalonia
                 double selectionRight = 0;
                 double selectionBottom = 0;
 
-                if (Selection[0].Left >= lastDrawnLeft && Selection[0].Left <= lastDrawnLeft + lastDrawnWidth)
-                {
-                    selectionLeft = Selection[0].Left == lastDrawnLeft ? 0 : lastDrawnXs[Selection[0].Left - lastDrawnLeft - 1];
-                }
-                else if (Selection[0].Left < lastDrawnLeft)
-                {
-                    selectionLeft = double.NegativeInfinity;
-                }
-                else if (Selection[0].Left > lastDrawnLeft + lastDrawnWidth)
-                {
-                    selectionLeft = double.PositiveInfinity;
-                }
-
-                if (Selection[0].Right >= lastDrawnLeft && Selection[0].Right <= lastDrawnLeft + lastDrawnWidth)
-                {
-                    selectionRight = lastDrawnXs[Selection[0].Right - lastDrawnLeft];
-                }
-                else if (Selection[0].Right < lastDrawnLeft)
-                {
-                    selectionRight = double.NegativeInfinity;
-                }
-                else if (Selection[0].Right > lastDrawnLeft + lastDrawnWidth)
-                {
-                    selectionRight = double.PositiveInfinity;
-                }
-
-                if (Selection[0].Top >= lastDrawnTop && Selection[0].Top <= lastDrawnTop + lastDrawnHeight)
-                {
-                    selectionTop = Selection[0].Top == lastDrawnTop ? 0 : lastDrawnYs[Selection[0].Top - lastDrawnTop - 1];
-                }
-                else if (Selection[0].Top < lastDrawnTop)
-                {
-                    selectionTop = double.NegativeInfinity;
-                }
-                else if (Selection[0].Top > lastDrawnTop + lastDrawnHeight)
-                {
-                    selectionTop = double.PositiveInfinity;
-                }
-
-                if (Selection[0].Bottom >= lastDrawnTop && Selection[0].Bottom <= lastDrawnTop + lastDrawnHeight)
-                {
-                    selectionBottom = lastDrawnYs[Selection[0].Bottom - lastDrawnTop];
-                }
-                else if (Selection[0].Bottom < lastDrawnTop)
-                {
-                    selectionBottom = double.NegativeInfinity;
-                }
-                else if (Selection[0].Bottom > lastDrawnTop + lastDrawnHeight)
-                {
-                    selectionBottom = double.PositiveInfinity;
-                }
+                // The frozen strips are drawn with their own origin, so the edges of a frozen column
+                // or row have to be resolved from there instead of the scrollable region.
+                selectionLeft = GetSelectionColumnEdge(Selection[0].Left, true);
+                selectionRight = GetSelectionColumnEdge(Selection[0].Right, false);
+                selectionTop = GetSelectionRowEdge(Selection[0].Top, true);
+                selectionBottom = GetSelectionRowEdge(Selection[0].Bottom, false);
 
                 moving = (Math.Abs(xPos - selectionLeft) <= 3 && yPos >= selectionTop && yPos <= selectionBottom) || (Math.Abs(xPos - selectionRight) <= 3 && yPos >= selectionTop && yPos <= selectionBottom) ||
                     (Math.Abs(yPos - selectionTop) <= 3 && xPos >= selectionLeft && xPos <= selectionRight) || (Math.Abs(yPos - selectionBottom) <= 3 && xPos >= selectionLeft && xPos <= selectionRight);
@@ -1993,9 +2595,24 @@ namespace Spreadalonia
                 }
             }
 
+            // The frozen strips are drawn with their own coordinate origin, so the slot indices
+            // computed above do not describe them: resolve the absolute cell indices instead.
+            int columnIndex = x + lastDrawnLeft;
+            int rowIndex = y + lastDrawnTop;
+
+            if (IsOverFrozenColumns(currentPoint.Position.X))
+            {
+                columnIndex = GetFrozenColumnIndex(currentPoint.Position.X);
+            }
+
+            if (IsOverFrozenRows(currentPoint.Position.Y))
+            {
+                rowIndex = GetFrozenRowIndex(currentPoint.Position.Y);
+            }
+
             if (fill)
             {
-                selectionStart = (Math.Max(Selection[0].Left, Math.Min(Selection[0].Right, x + lastDrawnLeft)), Math.Max(Selection[0].Top, Math.Min(Selection[0].Bottom, y + lastDrawnTop)));
+                selectionStart = (Math.Max(Selection[0].Left, Math.Min(Selection[0].Right, columnIndex)), Math.Max(Selection[0].Top, Math.Min(Selection[0].Bottom, rowIndex)));
 
                 selectionMoveDelta = (0, 0);
                 selectionBeingMoved = Selection[0];
@@ -2004,7 +2621,7 @@ namespace Spreadalonia
             }
             else if (moving)
             {
-                selectionStart = (Math.Max(Selection[0].Left, Math.Min(Selection[0].Right, x + lastDrawnLeft)), Math.Max(Selection[0].Top, Math.Min(Selection[0].Bottom, y + lastDrawnTop)));
+                selectionStart = (Math.Max(Selection[0].Left, Math.Min(Selection[0].Right, columnIndex)), Math.Max(Selection[0].Top, Math.Min(Selection[0].Bottom, rowIndex)));
 
 
                 selectionMoveDelta = (0, 0);
@@ -2016,12 +2633,12 @@ namespace Spreadalonia
             {
                 // If the pressed cell belongs to a merged range, redirect the interaction to the
                 // top-left cell of the merge so that selection and editing act on the whole range.
-                SelectionRange pressedSelection = new SelectionRange(x + lastDrawnLeft, y + lastDrawnTop, x + lastDrawnLeft, y + lastDrawnTop);
+                SelectionRange pressedSelection = new SelectionRange(columnIndex, rowIndex, columnIndex, rowIndex);
 
                 if (x >= 0 && y >= 0 && MergedRanges != null && MergedRanges.Count > 0)
                 {
-                    int pressedColumn = x + lastDrawnLeft;
-                    int pressedRow = y + lastDrawnTop;
+                    int pressedColumn = columnIndex;
+                    int pressedRow = rowIndex;
 
                     foreach (SelectionRange mergedRange in MergedRanges)
                     {
@@ -2030,6 +2647,8 @@ namespace Spreadalonia
                         {
                             x = mergedRange.Left - lastDrawnLeft;
                             y = mergedRange.Top - lastDrawnTop;
+                            columnIndex = mergedRange.Left;
+                            rowIndex = mergedRange.Top;
                             pressedSelection = mergedRange;
                             break;
                         }
@@ -2082,14 +2701,14 @@ namespace Spreadalonia
                         if (!found)
                         {
                             this.Container.Selection = this.Container.Selection.Add(pressedSelection);
-                            selectionStart = (x + lastDrawnLeft, y + lastDrawnTop);
+                            selectionStart = (columnIndex, rowIndex);
                             selectionMode = 0;
                         }
                         else
                         {
                             previousSelection = this.Container.Selection;
                             this.Container.Selection = this.Container.Selection.Difference(pressedSelection);
-                            selectionStart = (x + lastDrawnLeft, y + lastDrawnTop);
+                            selectionStart = (columnIndex, rowIndex);
                             selectionMode = 1;
                         }
                     }
@@ -2103,7 +2722,7 @@ namespace Spreadalonia
 
                         int selStartX;
 
-                        if (x + lastDrawnLeft >= prevStartColumn)
+                        if (columnIndex >= prevStartColumn)
                         {
                             selStartX = prevStartColumn;
                         }
@@ -2114,7 +2733,7 @@ namespace Spreadalonia
 
                         int selStartY;
 
-                        if (y + lastDrawnTop >= prevStartRow)
+                        if (rowIndex >= prevStartRow)
                         {
                             selStartY = prevStartRow;
                         }
@@ -2124,13 +2743,13 @@ namespace Spreadalonia
                         }
 
                         selectionStart = (selStartX, selStartY);
-                        this.Container.Selection = this.Selection.SetItem(this.Selection.Count - 1, new SelectionRange(Math.Min(selStartX, x + lastDrawnLeft), Math.Min(selStartY, y + lastDrawnTop), Math.Max(selStartX, x + lastDrawnLeft), Math.Max(selStartY, y + lastDrawnTop)));
+                        this.Container.Selection = this.Selection.SetItem(this.Selection.Count - 1, new SelectionRange(Math.Min(selStartX, columnIndex), Math.Min(selStartY, rowIndex), Math.Max(selStartX, columnIndex), Math.Max(selStartY, rowIndex)));
                         selectionMode = 0;
                     }
                     else
                     {
                         this.Container.Selection = ImmutableList.Create(pressedSelection);
-                        selectionStart = (x + lastDrawnLeft, y + lastDrawnTop);
+                        selectionStart = (columnIndex, rowIndex);
                         selectionMode = 0;
                     }
 
@@ -2154,13 +2773,13 @@ namespace Spreadalonia
                         this.Container.Selection = ImmutableList.Create(pressedSelection);
                     }
 
-                    selectionStart = (x + lastDrawnLeft, y + lastDrawnTop);
+                    selectionStart = (columnIndex, rowIndex);
                     selectionMode = 0;
                     pointerPressedAction = 0;
                 }
                 else if (currentPoint.Properties.IsLeftButtonPressed && e.ClickCount == 2)
                 {
-                    (int, int) cell = (x + lastDrawnLeft, y + lastDrawnTop);
+                    (int, int) cell = (columnIndex, rowIndex);
 
                     // Double clicking the +/- box must not start an edit either.
                     if (TryHitTreeBox(xPos, yPos, out TreeGradeCell doubleClickedTree, out (int, int) doubleClickedTreeKey))
@@ -2269,19 +2888,118 @@ namespace Spreadalonia
         {
             context.FillRectangle(this.Background, new Rect(0, 0, this.Bounds.Width, this.Bounds.Height));
 
+            double viewWidth = this.Bounds.Width;
+            double viewHeight = this.Bounds.Height;
+
+            frozenStripWidth = GetClampedFrozenWidth(viewWidth);
+            frozenStripHeight = GetClampedFrozenHeight(viewHeight);
+
+            // Discard the hit rectangles of the button cells before anything is drawn: only the ones
+            // that are actually drawn by one of the regions below get a new one, so that a button
+            // that has been scrolled out of view can no longer be clicked.
+            if (ButtonCells != null && ButtonCells.Count > 0)
+            {
+                foreach (KeyValuePair<(int, int), ButtonCell> kvp in ButtonCells)
+                {
+                    if (kvp.Value != null)
+                    {
+                        kvp.Value.HitRect = default;
+                    }
+                }
+            }
+
             using (context.PushTransform(Matrix.CreateTranslation(-1, -1)))
             {
-                (int left, double offsetX, int top, double offsetY, int width, double actualWidth, double startWidth, int height, double actualHeight, double startHeight) = GetRange(this.Offset.X, this.Offset.Y, this.Bounds.Width, this.Bounds.Height);
+                // The scrollable part of the table starts after the frozen strip and covers the rest
+                // of the viewport: the scroll offset therefore has to be measured from the end of the
+                // frozen strip, and the frozen rows / columns have to be skipped.
+                (int left, double leftDelta, int width, double actualWidth, double startWidth) = GetRangeX(this.Offset.X + frozenStripWidth, viewWidth - frozenStripWidth);
+                (int top, double topDelta, int height, double actualHeight, double startHeight) = GetRangeY(this.Offset.Y + frozenStripHeight, viewHeight - frozenStripHeight);
 
-                lastDrawnDeltaX = offsetX;
-                lastDrawnDeltaY = offsetY;
+                // The frozen strip is drawn without any scroll offset, hence the compensation.
+                double offsetX = leftDelta + frozenStripWidth;
+                double offsetY = topDelta + frozenStripHeight;
 
-                lastDrawnTop = top;
-                lastDrawnLeft = left;
-                lastDrawnWidth = width;
-                lastDrawnHeight = height;
+                int frozenLeft = 0;
+                double frozenLeftDelta = 0;
+                int frozenColumnSpan = Math.Max(0, frozenColumnCount - 1);
 
-                Pen gridPen = new Pen(new SolidColorBrush(GridColor));
+                if (frozenStripWidth > 0)
+                {
+                    (frozenLeft, frozenLeftDelta, frozenColumnSpan, _, _) = GetRangeX(0, frozenStripWidth);
+                }
+
+                int frozenTop = 0;
+                double frozenTopDelta = 0;
+                int frozenRowSpan = Math.Max(0, frozenRowCount - 1);
+
+                if (frozenStripHeight > 0)
+                {
+                    (frozenTop, frozenTopDelta, frozenRowSpan, _, _) = GetRangeY(0, frozenStripHeight);
+                }
+
+                // 1. scrollable rows and columns. This region also owns the hit testing data used by
+                // the pointer handlers; the frozen strips are resolved separately.
+                RenderRegion(context, left, top, width, height, offsetX, offsetY, new Rect(frozenStripWidth, frozenStripHeight, viewWidth - frozenStripWidth, viewHeight - frozenStripHeight), true);
+
+                // 2. frozen rows, scrollable columns.
+                if (frozenStripHeight > 0)
+                {
+                    RenderRegion(context, left, frozenTop, width, frozenRowSpan, offsetX, frozenTopDelta, new Rect(frozenStripWidth, 0, viewWidth - frozenStripWidth, frozenStripHeight), false);
+                }
+
+                // 3. scrollable rows, frozen columns.
+                if (frozenStripWidth > 0)
+                {
+                    RenderRegion(context, frozenLeft, top, frozenColumnSpan, height, frozenLeftDelta, offsetY, new Rect(0, frozenStripHeight, frozenStripWidth, viewHeight - frozenStripHeight), false);
+                }
+
+                // 4. frozen rows and frozen columns.
+                if (frozenStripWidth > 0 && frozenStripHeight > 0)
+                {
+                    RenderRegion(context, frozenLeft, frozenTop, frozenColumnSpan, frozenRowSpan, frozenLeftDelta, frozenTopDelta, new Rect(0, 0, frozenStripWidth, frozenStripHeight), false);
+                }
+
+                _ = Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
+                {
+                    this.Container.SetScrollbarMaximum(actualWidth + startWidth - viewWidth + GetWidth(left + width), actualHeight + startHeight - viewHeight + GetHeight(top + height));
+                });
+            }
+
+            // Separator lines between the frozen strips and the scrollable area.
+            if (frozenStripWidth > 0 || frozenStripHeight > 0)
+            {
+                Pen frozenSeparatorPen = new Pen(new SolidColorBrush(Color.FromRgb((byte)(this.GridColor.R * 0.6), (byte)(this.GridColor.G * 0.6), (byte)(this.GridColor.B * 0.6))), 1);
+
+                if (frozenStripWidth > 0)
+                {
+                    context.DrawLine(frozenSeparatorPen, new Point(frozenStripWidth + 0.5, 0).SnapToDevicePixels(this), new Point(frozenStripWidth + 0.5, viewHeight).SnapToDevicePixels(this));
+                }
+
+                if (frozenStripHeight > 0)
+                {
+                    context.DrawLine(frozenSeparatorPen, new Point(0, frozenStripHeight + 0.5).SnapToDevicePixels(this), new Point(viewWidth, frozenStripHeight + 0.5).SnapToDevicePixels(this));
+                }
+            }
+        }
+
+        /// <summary>
+        /// Draws one rectangular region of the table (either the scrollable area or one of the frozen
+        /// strips). Every region uses its own coordinate origin: the frozen ones are not translated by
+        /// the scroll offset, which is what keeps them in place while the rest of the table scrolls.
+        /// </summary>
+        /// <param name="context">The drawing context.</param>
+        /// <param name="left">The index of the first drawn column.</param>
+        /// <param name="top">The index of the first drawn row.</param>
+        /// <param name="width">The number of drawn columns.</param>
+        /// <param name="height">The number of drawn rows.</param>
+        /// <param name="offsetX">The horizontal translation applied to the region.</param>
+        /// <param name="offsetY">The vertical translation applied to the region.</param>
+        /// <param name="region">The region of the viewport covered by this region, in screen coordinates.</param>
+        /// <param name="isMainRegion"><see langword="true"/> for the scrollable region, which owns the hit testing data.</param>
+        private void RenderRegion(DrawingContext context, int left, int top, int width, int height, double offsetX, double offsetY, Rect region, bool isMainRegion)
+        {
+            Pen gridPen = new Pen(new SolidColorBrush(GridColor));
                 Pen blackPen = new Pen(Brushes.Black);
                 Pen selectionPen = new Pen(SelectionAccent, 2);
                 Pen selectionMovePen = new Pen(SelectionAccent, 3);
@@ -2292,7 +3010,10 @@ namespace Spreadalonia
 
                 Typeface defaultTypeFace = new Typeface(this.FontFamily, this.FontStyle, this.FontWeight);
 
+                // Everything drawn by this region (including the selection) is clipped to it, so that
+                // the frozen strips never paint over the scrollable area and vice versa.
                 using (context.PushTransform(Matrix.CreateTranslation(offsetX, offsetY)))
+                using (context.PushClip(new Rect(region.X + 1 - offsetX, region.Y + 1 - offsetY, region.Width, region.Height)))
                 {
                     double[] xs = new double[width + 1];
                     double[] ys = new double[height + 1];
@@ -2314,22 +3035,22 @@ namespace Spreadalonia
                             ys[y] = currY;
                         }
 
-                        lastDrawnXs = xs;
-                        lastDrawnYs = ys;
-
-                        // Discard the hit rectangles of the button cells: only the ones that are
-                        // actually drawn below get a new one, so that a button that has been
-                        // scrolled out of view can no longer be clicked.
-                        if (ButtonCells != null && ButtonCells.Count > 0)
+                        // Only the scrollable region publishes its coordinates: the frozen strips are
+                        // resolved by GetDrawnX / GetDrawnY, which know about the frozen origin.
+                        if (isMainRegion)
                         {
-                            foreach (KeyValuePair<(int, int), ButtonCell> kvp in ButtonCells)
-                            {
-                                if (kvp.Value != null)
-                                {
-                                    kvp.Value.HitRect = default;
-                                }
-                            }
+                            lastDrawnXs = xs;
+                            lastDrawnYs = ys;
+
+                            lastDrawnDeltaX = offsetX;
+                            lastDrawnDeltaY = offsetY;
+
+                            lastDrawnTop = top;
+                            lastDrawnLeft = left;
+                            lastDrawnWidth = width;
+                            lastDrawnHeight = height;
                         }
+
 
                         // Draw vertical grid lines, skipping the interior of merged ranges
                         for (int x = 0; x <= width; x++)
@@ -2420,6 +3141,21 @@ namespace Spreadalonia
                                 continue;
                             }
 
+                            // Rows at the very beginning / end of a tree expand / collapse animation
+                            // have (almost) no height: skip their content entirely.
+                            if (animatedRowOpacity.Count > 0 && animatedRowOpacity.TryGetValue(top + y, out double rowOpacity) && rowOpacity <= 0.02)
+                            {
+                                continue;
+                            }
+
+                            // Rows that are fading in / out together with the tree expand / collapse
+                            // animation are drawn with the interpolated opacity (1 when the row is
+                            // not animating). Everything drawn for the row (text, tree guide lines,
+                            // numeric formatting) is affected.
+                            double rowFade = animatedRowOpacity.Count > 0 && animatedRowOpacity.TryGetValue(top + y, out double rowOpacityValue) ? rowOpacityValue : 1;
+
+                            using (context.PushOpacity(rowFade))
+                            {
                             for (int x = 0; x <= width; x++)
                             {
                                 // Hidden columns have a width of zero; nothing of theirs is drawn,
@@ -2891,6 +3627,7 @@ namespace Spreadalonia
                                     context.DrawText(mergedFormattedText, new Point(mergedRealX, mergedRealY));
                                 }
                             }
+                            }
                         }
 
                         // Draw borders on top of the grid lines
@@ -3282,13 +4019,8 @@ namespace Spreadalonia
                         }
                     }
                 }
-
-                _ = Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
-                {
-                    this.Container.SetScrollbarMaximum(actualWidth + startWidth - this.Bounds.Width + GetWidth(left + width), actualHeight + startHeight - this.Bounds.Height + GetHeight(top + height));
-                });
-            }
         }
+
 
         /// <summary>
         /// Splits the line segment <c>[start, end]</c> (inclusive cell indices along the orthogonal

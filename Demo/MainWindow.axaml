@@ -7,7 +7,7 @@
         x:Class="Demo.MainWindow"
         Title="Spreadalonia - Features Demo">
 	<DockPanel>
-		<StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="8" Spacing="8">
+		<WrapPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="8" >
 			<Button x:Name="BasicDemoButton" Content="Basic Demo" Click="BasicDemoButton_Click"/>
 			<Button x:Name="FeaturesButton" Content="Merge / Border / Background / Style" Click="FeaturesButton_Click"/>
 			<Button x:Name="RgfButton" Content="LoadRgf Demo" Click="RgfButton_Click"/>
@@ -16,8 +16,10 @@
 			<Button x:Name="LinkCellButton" Content="LinkCell Demo" Click="LinkCellButton_Click"/>
 			<Button x:Name="TreeCellButton" Content="TreeGrade / NumericCell Demo" Click="TreeCellButton_Click"/>
 			<Button x:Name="HiddenColumnButton" Content="HiddenColumn / ButtonCell Demo" Click="HiddenColumnButton_Click"/>
+		<Button x:Name="FreezePanesButton" Content="Freeze Panes Demo" Click="FreezePanesButton_Click"/> 
 			<Button x:Name="XlsxExportButton" Content="Export Xlsx Demo" Click="XlsxExportButton_Click"/>
-		</StackPanel>
+			<CheckBox x:Name="TreeAnimationCheckBox" Content="Tree animation" IsChecked="True" VerticalAlignment="Center" IsCheckedChanged="TreeAnimationCheckBox_IsCheckedChanged"/>
+		</WrapPanel>
 		<local:Spreadsheet x:Name="SpreadsheetControl">
 		</local:Spreadsheet>
 	</DockPanel>

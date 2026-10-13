@@ -112,7 +112,12 @@ namespace Spreadalonia
 
                 using (context.PushTransform(Matrix.CreateTranslation(-1, -1)))
                 {
-                    (int left, double offsetX, int top, double offsetY, int width, double actualWidth, double startWidth, int height, double actualHeight, double startHeight) = Owner.GetRange(this.Offset.X, this.Offset.Y, this.Bounds.Width, this.Bounds.Height);
+                    // The scrollable area starts after the frozen strip, exactly like in the table:
+                    // using the same range keeps the highlight aligned with the cells underneath it.
+                    (int left, double leftDelta, int top, double topDelta, int width, double actualWidth, double startWidth, int height, double actualHeight, double startHeight) = Owner.GetRange(this.Offset.X + Owner.FrozenStripWidth, this.Offset.Y + Owner.FrozenStripHeight, this.Bounds.Width - Owner.FrozenStripWidth, this.Bounds.Height - Owner.FrozenStripHeight);
+
+                    double offsetX = leftDelta + Owner.FrozenStripWidth;
+                    double offsetY = topDelta + Owner.FrozenStripHeight;
 
                     using (context.PushTransform(Matrix.CreateTranslation(offsetX, offsetY)))
                     {

@@ -6,6 +6,7 @@ using Avalonia.Media;
 using Spreadalonia;
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -136,10 +137,114 @@ namespace Demo
                         SaveScreenshot(@"C:\Users\89664\Desktop\hidden_column_all.png");
                         Console.WriteLine("[Test] All columns screenshot saved.");
 
+                        // Scroll the auxiliary-item column (8) into view: the RefCell style
+                        // magnifier icons at its right edge must be visible.
+                        SpreadsheetControl.Selection = ImmutableList.Create(new SelectionRange(8, 2, 8, 2));
+                        await System.Threading.Tasks.Task.Delay(600);
+                        SaveScreenshot(@"C:\Users\89664\Desktop\hidden_column_aux_icons.png");
+                        Console.WriteLine("[Test] Auxiliary icon column screenshot saved.");
+
                         SpreadsheetControl.SetColumnsVisible(new[] { 2, 3, 4, 5 }, false);
                         await System.Threading.Tasks.Task.Delay(500);
                         SaveScreenshot(@"C:\Users\89664\Desktop\hidden_column_hidden.png");
                         Console.WriteLine("[Test] Hidden columns screenshot saved.");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine("[Test] EXCEPTION: " + ex);
+                    }
+                    finally
+                    {
+                        Environment.Exit(0);
+                    }
+                };
+            }
+
+            // Automated screenshot test for the frozen rows / columns demo: shoots the sheet at the
+            // top-left corner, after scrolling to the bottom-right corner (the frozen header row and
+            // the 月 / 日 columns have to stay in place), and with a single axis frozen.
+            if (Environment.GetCommandLineArgs().Any(a => a == "--freeze-panes-test"))
+            {
+                Opened += async (_, _) =>
+                {
+                    try
+                    {
+                        await System.Threading.Tasks.Task.Delay(500);
+                        FreezePanesButton_Click(null!, null!);
+                        await System.Threading.Tasks.Task.Delay(800);
+                        SaveScreenshot(@"C:\Users\89664\Desktop\freeze_panes_top_left.png");
+                        Console.WriteLine("[Test] Frozen row + columns screenshot saved.");
+
+                        // Selecting a cell far away scrolls the sheet: the frozen strips must not move.
+                        SpreadsheetControl.Selection = ImmutableList.Create(new SelectionRange(13, 70, 13, 70));
+                        await System.Threading.Tasks.Task.Delay(600);
+                        SaveScreenshot(@"C:\Users\89664\Desktop\freeze_panes_scrolled.png");
+                        Console.WriteLine("[Test] Scrolled screenshot saved.");
+
+                        SpreadsheetControl.FreezePanes(0, 3);
+                        await System.Threading.Tasks.Task.Delay(600);
+                        SaveScreenshot(@"C:\Users\89664\Desktop\freeze_columns_only.png");
+                        Console.WriteLine("[Test] Frozen columns only screenshot saved.");
+
+                        SpreadsheetControl.FreezePanes(3, 0);
+                        await System.Threading.Tasks.Task.Delay(600);
+                        SaveScreenshot(@"C:\Users\89664\Desktop\freeze_rows_only.png");
+                        Console.WriteLine("[Test] Frozen rows only screenshot saved.");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine("[Test] EXCEPTION: " + ex);
+                    }
+                    finally
+                    {
+                        Environment.Exit(0);
+                    }
+                };
+            }
+
+            // Automated screenshot test for the tree expand / collapse animation: shoots the sheet
+            // mid-animation (rows are still growing / shrinking and fading) and after the animation
+            // has finished (final state must match the non-animated result).
+            if (Environment.GetCommandLineArgs().Any(a => a == "--tree-animation-test"))
+            {
+                Opened += async (_, _) =>
+                {
+                    try
+                    {
+                        await System.Threading.Tasks.Task.Delay(500);
+                        TreeCellButton_Click(null!, null!);
+                        await System.Threading.Tasks.Task.Delay(800);
+                        SaveScreenshot(@"C:\Users\89664\Desktop\tree_animation_initial.png");
+
+                        SpreadsheetControl.ToggleTreeCell(0, 1);
+                        await System.Threading.Tasks.Task.Delay(80);
+                        SaveScreenshot(@"C:\Users\89664\Desktop\tree_animation_collapse_mid.png");
+                        await System.Threading.Tasks.Task.Delay(500);
+                        SaveScreenshot(@"C:\Users\89664\Desktop\tree_animation_collapse_done.png");
+
+                        SpreadsheetControl.ToggleTreeCell(0, 1);
+                        await System.Threading.Tasks.Task.Delay(80);
+                        SaveScreenshot(@"C:\Users\89664\Desktop\tree_animation_expand_mid.png");
+                        await System.Threading.Tasks.Task.Delay(500);
+                        SaveScreenshot(@"C:\Users\89664\Desktop\tree_animation_expand_done.png");
+
+                        // Scrolled down: collapsing a node must not move the viewport. The animation
+                        // only interpolates row heights, it never touches the scroll offset, so the
+                        // rows above the toggled node have to stay exactly where they are.
+                        int scrolledParent = Enumerable.Range(40, 80).First(r =>
+                            SpreadsheetControl.TreeCells.TryGetValue((0, r), out TreeGradeCell parent) && parent != null && !parent.IsLeaf &&
+                            SpreadsheetControl.TreeCells.TryGetValue((0, r + 1), out TreeGradeCell children) && children != null && children.Level > parent.Level);
+
+                        SpreadsheetControl.Selection = ImmutableList.Create(new SelectionRange(0, scrolledParent + 4, 0, scrolledParent + 4));
+                        await System.Threading.Tasks.Task.Delay(500);
+                        SaveScreenshot(@"C:\Users\89664\Desktop\tree_animation_scroll_before.png");
+
+                        SpreadsheetControl.ToggleTreeCell(0, scrolledParent);
+                        await System.Threading.Tasks.Task.Delay(80);
+                        SaveScreenshot(@"C:\Users\89664\Desktop\tree_animation_scroll_mid.png");
+                        await System.Threading.Tasks.Task.Delay(500);
+                        SaveScreenshot(@"C:\Users\89664\Desktop\tree_animation_scroll_after.png");
+                        Console.WriteLine($"[Test] Scrolled animation test toggled row {scrolledParent}.");
                     }
                     catch (Exception ex)
                     {
@@ -755,6 +860,9 @@ namespace Demo
             SpreadsheetControl.NumericCells?.Clear();
             SpreadsheetControl.ClearContent();
 
+            // A previous demo may have frozen rows or columns: start from a clean slate.
+            SpreadsheetControl.UnfreezePanes();
+
             treeParentRow.Clear();
             groupLeaves.Clear();
 
@@ -929,6 +1037,17 @@ namespace Demo
         }
 
         /// <summary>
+        /// Turns the tree expand / collapse animation on and off, so that the animated and the
+        /// instant behaviour of the TreeGrade / NumericCell demo can be compared side by side.
+        /// </summary>
+        private void TreeAnimationCheckBox_IsCheckedChanged(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+        {
+            SpreadsheetControl.IsTreeAnimationEnabled = TreeAnimationCheckBox.IsChecked == true;
+
+            Console.WriteLine($"[TreeAnimation] {(SpreadsheetControl.IsTreeAnimationEnabled ? "enabled" : "disabled")}");
+        }
+
+        /// <summary>
         /// Wires the tree / numeric events used by the demo sheet.
         /// </summary>
         private void WireTreeCellEvents()
@@ -1057,6 +1176,9 @@ namespace Demo
             SpreadsheetControl.ButtonCells?.Clear();
             SpreadsheetControl.ClearContent();
 
+            // A previous demo may have frozen rows or columns: start from a clean slate.
+            SpreadsheetControl.UnfreezePanes();
+
             // A previous demo may have hidden columns: start from a clean slate.
             SpreadsheetControl.ShowAllRows();
             SpreadsheetControl.ShowAllColumns();
@@ -1125,19 +1247,20 @@ namespace Demo
                 new CellBackground(new SelectionRange(0, 0, 8, 0), new SolidColorBrush(Color.Parse("#D9E2F3"))),
             };
 
-            // Auxiliary item picker: a ButtonCell per data row in the last column.
+            // Auxiliary item picker: a RefCell style icon button per data row in the last column.
+            // The cell keeps its normal text (editable, like the WPF RefCell) and a magnifier
+            // icon is drawn at the right edge; clicking the icon raises CellTapped.
             auxColumn = 8;
 
             for (int r = 1; r <= rows.GetLength(0); r++)
             {
-                SpreadsheetControl.ButtonCells[(auxColumn, r)] = new ButtonCell("选择辅助项", "AuxItem", "row" + r)
+                SpreadsheetControl.ButtonCells[(auxColumn, r)] = new ButtonCell(null, "AuxItem", "row" + r)
                 {
-                    Background = new SolidColorBrush(Color.Parse("#F2F2F2")),
-                    PressedBackground = new SolidColorBrush(Color.Parse("#C6D8F0")),
-                    Foreground = new SolidColorBrush(Color.Parse("#337AB7")),
+                    Mode = ButtonCellMode.Icon,
+                    SuppressEdit = false,
                 };
 
-                SpreadsheetControl.CellTextAlignment[(auxColumn, r)] = TextAlignment.Center;
+                SpreadsheetControl.CellTextAlignment[(auxColumn, r)] = TextAlignment.Left;
                 SpreadsheetControl.CellVerticalAlignment[(auxColumn, r)] = VerticalAlignment.Center;
             }
 
@@ -1164,13 +1287,138 @@ namespace Demo
 
             if (SpreadsheetControl.ButtonCells != null &&
                 SpreadsheetControl.ButtonCells.TryGetValue((column, row), out ButtonCell cell) &&
-                cell != null)
+                cell != null &&
+                cell.Mode == ButtonCellMode.Button)
             {
+                // Icon mode cells display the raw cell data, so no Text update is needed.
                 cell.Text = next;
             }
 
             SpreadsheetControl.Refresh();
             Console.WriteLine($"[CellTapped] ({column}, {row}) -> '{next}' written back.");
+        }
+
+        /// <summary>
+        /// Builds a wide 明细账 (sub-ledger) sheet and freezes its header row together with the
+        /// 凭证 date columns, which is what SSFinance needs for the voucher / ledger pages: the
+        /// caption row and the 月 / 日 columns stay visible while the rest of the sheet scrolls.
+        /// </summary>
+        private void FreezePanesButton_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+        {
+            SpreadsheetControl.MergedRanges = null;
+            SpreadsheetControl.CellBackgrounds = null;
+            SpreadsheetControl.CellBorders = null;
+            SpreadsheetControl.MaxTableWidth = 14;
+            SpreadsheetControl.MaxTableHeight = 200;
+            SpreadsheetControl.CellFontSize?.Clear();
+            SpreadsheetControl.CellTypefaces?.Clear();
+            SpreadsheetControl.CellForeground?.Clear();
+            SpreadsheetControl.CellTextAlignment?.Clear();
+            SpreadsheetControl.CellVerticalAlignment?.Clear();
+            SpreadsheetControl.CellMargin?.Clear();
+            SpreadsheetControl.TitleCells?.Clear();
+            SpreadsheetControl.LinkCells?.Clear();
+            SpreadsheetControl.TreeCells?.Clear();
+            SpreadsheetControl.NumericCells?.Clear();
+            SpreadsheetControl.ButtonCells?.Clear();
+            SpreadsheetControl.ClearContent();
+
+            SpreadsheetControl.ShowAllRows();
+            SpreadsheetControl.ShowAllColumns();
+            SpreadsheetControl.UnfreezePanes();
+
+            string[] headers =
+            {
+                "月", "日", "凭证号", "摘要", "科目编码", "科目名称",
+                "借方金额", "贷方金额", "方向", "余额", "数量", "单价", "部门", "备注"
+            };
+
+            string[] summaries =
+            {
+                "收到货款", "采购原材料", "支付运费", "计提折旧", "发放工资",
+                "报销差旅费", "缴纳增值税", "结转成本", "收到投资款", "支付租金"
+            };
+
+            (string Code, string Name)[] subjects =
+            {
+                ("1122", "应收账款"), ("2202", "应付账款"), ("1001", "库存现金"),
+                ("1002", "银行存款"), ("5001", "主营业务收入"), ("6601", "销售费用")
+            };
+
+            string[] departments = { "销售部", "采购部", "财务部", "生产部", "行政部" };
+
+            var data = new Dictionary<(int, int), string>();
+
+            for (int c = 0; c < headers.Length; c++)
+            {
+                data[(c, 0)] = headers[c];
+                SpreadsheetControl.CellTypefaces[(c, 0)] = new Typeface(FontFamily.Default, FontStyle.Normal, FontWeight.Bold);
+                SpreadsheetControl.CellTextAlignment[(c, 0)] = TextAlignment.Center;
+                SpreadsheetControl.CellVerticalAlignment[(c, 0)] = VerticalAlignment.Center;
+            }
+
+            Random rnd = new Random(20261013);
+            decimal balance = 0m;
+
+            for (int r = 1; r <= 80; r++)
+            {
+                (string code, string name) = subjects[r % subjects.Length];
+
+                decimal debit = rnd.Next(0, 2) == 0 ? rnd.Next(1, 90) * 100m : 0m;
+                decimal credit = debit == 0 ? rnd.Next(1, 60) * 100m : 0m;
+
+                balance += debit - credit;
+
+                data[(0, r)] = ((r % 12) + 1).ToString();
+                data[(1, r)] = ((r % 28) + 1).ToString();
+                data[(2, r)] = "记-" + (1000 + r).ToString();
+                data[(3, r)] = summaries[r % summaries.Length];
+                data[(4, r)] = code;
+                data[(5, r)] = name;
+                data[(6, r)] = debit > 0 ? debit.ToString("N2") : "";
+                data[(7, r)] = credit > 0 ? credit.ToString("N2") : "";
+                data[(8, r)] = balance >= 0 ? "借" : "贷";
+                data[(9, r)] = Math.Abs(balance).ToString("N2");
+                data[(10, r)] = rnd.Next(1, 500).ToString();
+                data[(11, r)] = (rnd.Next(10, 300) / 10m).ToString("N2");
+                data[(12, r)] = departments[r % departments.Length];
+                data[(13, r)] = "";
+
+                SpreadsheetControl.CellTextAlignment[(0, r)] = TextAlignment.Center;
+                SpreadsheetControl.CellTextAlignment[(1, r)] = TextAlignment.Center;
+                SpreadsheetControl.CellTextAlignment[(3, r)] = TextAlignment.Left;
+                SpreadsheetControl.CellTextAlignment[(4, r)] = TextAlignment.Left;
+                SpreadsheetControl.CellTextAlignment[(5, r)] = TextAlignment.Left;
+                SpreadsheetControl.CellTextAlignment[(8, r)] = TextAlignment.Center;
+                SpreadsheetControl.CellTextAlignment[(12, r)] = TextAlignment.Left;
+
+                for (int c = 6; c <= 11; c++)
+                {
+                    SpreadsheetControl.CellTextAlignment[(c, r)] = TextAlignment.Right;
+                    SpreadsheetControl.NumericCells[(c, r)] = new NumericCell(2) { NegativeRed = true };
+                }
+            }
+
+            SpreadsheetControl.SetData(data);
+
+            SpreadsheetControl.SetWidth(new Dictionary<int, double>
+            {
+                [0] = 45, [1] = 45, [2] = 90, [3] = 150, [4] = 100, [5] = 160,
+                [6] = 110, [7] = 110, [8] = 55, [9] = 120,
+                [10] = 80, [11] = 90, [12] = 110, [13] = 140,
+            });
+
+            SpreadsheetControl.CellBackgrounds = new List<CellBackground>
+            {
+                new CellBackground(new SelectionRange(0, 0, 13, 0), new SolidColorBrush(Color.Parse("#D9E2F3"))),
+            };
+
+            // Freeze the header row and the 月 / 日 columns: they stay put while the ledger scrolls.
+            SpreadsheetControl.FreezePanes(1, 2);
+
+            SpreadsheetControl.Refresh();
+
+            Console.WriteLine("[FreezePanes] Sheet built: FrozenRowCount = 1, FrozenColumnCount = 2.");
         }
 
         private void XlsxExportButton_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
@@ -1208,6 +1456,9 @@ namespace Demo
             SpreadsheetControl.TitleCells?.Clear();
             SpreadsheetControl.LinkCells?.Clear();
             SpreadsheetControl.ClearContent();
+
+            // A previous demo may have frozen rows or columns: start from a clean slate.
+            SpreadsheetControl.UnfreezePanes();
 
             var data = new Dictionary<(int, int), string>
             {

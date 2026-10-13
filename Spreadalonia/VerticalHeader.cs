@@ -220,6 +220,14 @@ namespace Spreadalonia
                 }
             }
 
+            // The frozen rows are drawn with their own (unscrolled) origin, so the hit test above does
+            // not describe them: resolve the row index from the frozen strip directly.
+            if (Owner != null && Owner.IsOverFrozenRows(currentPoint.Position.Y))
+            {
+                clickedRow = Owner.GetFrozenRowIndex(currentPoint.Position.Y);
+            }
+
+
             if (clickedRow >= 0)
             {
 
@@ -255,7 +263,7 @@ namespace Spreadalonia
                     }
                     else if (pointerPressedAction == 2)
                     {
-                        double newHeight = Math.Max(10, originalRowHeight + yPos - dragStartY);
+                        double newHeight = Math.Max(10, originalRowHeight + currentPoint.Position.Y - dragStartY);
 
                         Owner.RowHeights[selectionStartRow] = newHeight;
                         Owner.InvalidateVisual();
@@ -301,6 +309,14 @@ namespace Spreadalonia
                     }
                 }
             }
+
+            // The frozen rows are drawn with their own (unscrolled) origin, so the hit test above does
+            // not describe them: resolve the row index from the frozen strip directly.
+            if (Owner != null && Owner.IsOverFrozenRows(currentPoint.Position.Y))
+            {
+                clickedRow = Owner.GetFrozenRowIndex(currentPoint.Position.Y);
+            }
+
 
             if (e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
             {
@@ -362,7 +378,13 @@ namespace Spreadalonia
                 }
                 else
                 {
-                    if (yPos - (clickedRow > 0 ? lastDrawnYs[clickedRow - 1] : 0) <= 5)
+                    // In the frozen strip the top edge of the row is its table coordinate: the drawn
+                    // coordinates of the scrollable slice do not apply there.
+                    double rowTopEdge = Owner != null && Owner.IsOverFrozenRows(currentPoint.Position.Y)
+                        ? Owner.GetRowStart(clickedRow) - lastDrawnDelta
+                        : (clickedRow > 0 ? lastDrawnYs[clickedRow - 1] : 0);
+
+                    if (yPos - rowTopEdge <= 5)
                     {
                         clickedRow--;
                     }
@@ -374,7 +396,10 @@ namespace Spreadalonia
                         selectionStartRow = clickedRow;
 
                         originalRowHeight = Owner.GetHeight(clickedRow, out wasOriginalRowHeightDefault);
-                        dragStartY = yPos;
+
+                        // The drag distance is measured in screen coordinates, so that it stays
+                        // correct even when the pointer leaves the frozen row strip.
+                        dragStartY = currentPoint.Position.Y;
                     }
                     else if (e.ClickCount == 2)
                     {
@@ -599,11 +624,44 @@ namespace Spreadalonia
 
             context.FillRectangle(new SolidColorBrush(this.HeaderBackground), new Rect(0, 0, this.Bounds.Width, this.Bounds.Height));
 
-            (int left, double offsetX, int top, double offsetY, int width, double actualWidth, double startWidth, int height, double actualHeight, double startHeight) = Owner.GetRange(Owner.Offset.X, Owner.Offset.Y, this.Bounds.Width, this.Bounds.Height);
+            double frozenHeight = Owner == null ? 0 : Owner.GetClampedFrozenHeight(this.Bounds.Height);
 
-            lastDrawnTop = top;
-            lastDrawnDelta = offsetY;
+            (int left, double offsetX, int width, double actualWidth, double startWidth) = Owner.GetRangeX(Owner.Offset.X, this.Bounds.Width);
 
+            if (frozenHeight <= 0)
+            {
+                (int top, double offsetY, int height, double actualHeight, double startHeight) = Owner.GetRangeY(Owner.Offset.Y, this.Bounds.Height);
+                RenderRows(context, top, height, offsetY, left, width, 0, this.Bounds.Height, true);
+            }
+            else
+            {
+                // Scrollable rows: they start after the frozen strip, exactly like the content area.
+                (int top, double topDelta, int height, double actualHeight, double startHeight) = Owner.GetRangeY(Owner.Offset.Y + frozenHeight, this.Bounds.Height - frozenHeight);
+                RenderRows(context, top, height, topDelta + frozenHeight, left, width, frozenHeight, this.Bounds.Height - frozenHeight, true);
+
+                // Frozen rows: drawn without any scroll offset, so that they stay in place.
+                (int frozenTop, double frozenTopDelta, int frozenRowSpan, double frozenActualHeight, double frozenStartHeight) = Owner.GetRangeY(0, frozenHeight);
+                RenderRows(context, frozenTop, frozenRowSpan, frozenTopDelta, left, width, 0, frozenHeight, false);
+
+                context.DrawLine(this.HeaderSeparator, new Point(0, frozenHeight + 0.5).SnapToDevicePixels(this), new Point(this.Bounds.Width, frozenHeight + 0.5).SnapToDevicePixels(this));
+            }
+        }
+
+        /// <summary>
+        /// Draws one vertical slice of the header: either the scrollable rows or the frozen row strip,
+        /// which is drawn without the scroll offset so that it stays in place.
+        /// </summary>
+        /// <param name="context">The drawing context.</param>
+        /// <param name="top">The index of the first drawn row.</param>
+        /// <param name="height">The number of drawn rows.</param>
+        /// <param name="offsetY">The vertical translation applied to the slice.</param>
+        /// <param name="left">The index of the first visible column (used to decide the selection style).</param>
+        /// <param name="width">The number of visible columns.</param>
+        /// <param name="regionY">The top edge of the slice, in screen coordinates.</param>
+        /// <param name="regionHeight">The height of the slice.</param>
+        /// <param name="isMainRegion"><see langword="true"/> for the scrollable slice, which owns the hit testing data.</param>
+        private void RenderRows(DrawingContext context, int top, int height, double offsetY, int left, int width, double regionY, double regionHeight, bool isMainRegion)
+        {
             Pen gridPen = new Pen(new LinearGradientBrush() { StartPoint = new RelativePoint(0, 0, RelativeUnit.Absolute), EndPoint = new RelativePoint(this.Bounds.Width, 0, RelativeUnit.Absolute), GradientStops = new GradientStops() { new GradientStop(this.HeaderBackground, 0), new GradientStop(this.GridColor, 1) } });
             IBrush brs = this.Foreground;
             Brush selectionHighlightBrush = new SolidColorBrush(Color.FromArgb(16, 0, 0, 0));
@@ -614,6 +672,7 @@ namespace Spreadalonia
             Typeface typeFace = new Typeface(this.FontFamily, this.FontStyle, this.FontWeight);
 
             using (context.PushTransform(Matrix.CreateTranslation(0, offsetY)))
+            using (context.PushClip(new Rect(0, regionY - offsetY, this.Bounds.Width, regionHeight)))
             {
                 double[] ys = new double[height + 1];
 
@@ -652,7 +711,14 @@ namespace Spreadalonia
                     ys[y] = currY;
                 }
 
-                lastDrawnYs = ys;
+                // Only the scrollable slice publishes its coordinates: the frozen strip is resolved
+                // by the pointer handlers, which know about the frozen origin.
+                if (isMainRegion)
+                {
+                    lastDrawnYs = ys;
+                    lastDrawnTop = top;
+                    lastDrawnDelta = offsetY;
+                }
 
                 for (int y = 0; y <= height; y++)
                 {
