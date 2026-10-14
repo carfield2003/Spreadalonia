@@ -287,6 +287,75 @@ namespace Demo
                 };
             }
 
+            // Automated screenshot test for a merged cell that crosses the frozen column boundary:
+            // the title (row 1 merged over columns A..D) must be drawn exactly once, anchored in the
+            // frozen strip, and must not repeat or drift when a frozen column is resized.
+            if (Environment.GetCommandLineArgs().Any(a => a == "--freeze-merge-test"))
+            {
+                Opened += async (_, _) =>
+                {
+                    try
+                    {
+                        await System.Threading.Tasks.Task.Delay(500);
+
+                        var data = new Dictionary<(int, int), string>
+                        {
+                            [(0, 0)] = "试算平衡表",
+                            [(0, 1)] = "科目编码",
+                            [(1, 1)] = "科目名称",
+                            [(2, 1)] = "年初余额",
+                            [(2, 2)] = "借方",
+                            [(3, 2)] = "贷方",
+                            [(0, 3)] = "101",
+                            [(1, 3)] = "现金",
+                            [(0, 4)] = "102",
+                            [(1, 4)] = "银行存款",
+                            [(0, 5)] = "113",
+                            [(1, 5)] = "应收账款",
+                            [(0, 6)] = "116",
+                            [(1, 6)] = "固定资产",
+                            [(0, 7)] = "118",
+                            [(1, 7)] = "存货",
+                        };
+                        // SetData merges into the existing sheet, so start from a blank one.
+                        SpreadsheetControl.Data.Clear();
+                        SpreadsheetControl.SetData(data);
+                        SpreadsheetControl.MergedRanges = new List<SelectionRange>
+                        {
+                            new SelectionRange(0, 0, 3, 0), // title across the frozen boundary (A:B frozen)
+                            new SelectionRange(2, 1, 3, 1), // 年初余额 header inside the scrollable columns
+                        };
+                        SpreadsheetControl.FreezePanes(0, 2);
+                        SpreadsheetControl.Refresh();
+                        await System.Threading.Tasks.Task.Delay(600);
+                        SaveScreenshot(@"C:\Users\89664\Desktop\freeze_merge_initial.png");
+                        Console.WriteLine("[Test] Freeze + merged title screenshot saved.");
+
+                        // Resize a frozen column: the merged title must stay a single copy.
+                        SpreadsheetControl.SetWidth(new Dictionary<int, double> { [1] = 160 });
+                        SpreadsheetControl.Refresh();
+                        await System.Threading.Tasks.Task.Delay(600);
+                        SaveScreenshot(@"C:\Users\89664\Desktop\freeze_merge_resized.png");
+                        Console.WriteLine("[Test] Freeze + merged title after column resize screenshot saved.");
+
+                        // And a scrollable column as well.
+                        SpreadsheetControl.SetWidth(new Dictionary<int, double> { [2] = 150 });
+                        SpreadsheetControl.Refresh();
+                        await System.Threading.Tasks.Task.Delay(600);
+                        SaveScreenshot(@"C:\Users\89664\Desktop\freeze_merge_resized_scrollable.png");
+                        Console.WriteLine("[Test] Freeze + merged title after scrollable column resize screenshot saved.");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine("[Test] EXCEPTION: " + ex);
+                    }
+                    finally
+                    {
+                        Environment.Exit(0);
+                    }
+                };
+            }
+
             // Automated screenshot test for the tree expand / collapse animation: shoots the sheet
             // mid-animation (rows are still growing / shrinking and fading) and after the animation
             // has finished (final state must match the non-animated result).

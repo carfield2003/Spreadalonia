@@ -2940,24 +2940,24 @@ namespace Spreadalonia
 
                 // 1. scrollable rows and columns. This region also owns the hit testing data used by
                 // the pointer handlers; the frozen strips are resolved separately.
-                RenderRegion(context, left, top, width, height, offsetX, offsetY, new Rect(frozenStripWidth, frozenStripHeight, viewWidth - frozenStripWidth, viewHeight - frozenStripHeight), true);
+                RenderRegion(context, left, top, width, height, offsetX, offsetY, new Rect(frozenStripWidth, frozenStripHeight, viewWidth - frozenStripWidth, viewHeight - frozenStripHeight), true, false, false);
 
                 // 2. frozen rows, scrollable columns.
                 if (frozenStripHeight > 0)
                 {
-                    RenderRegion(context, left, frozenTop, width, frozenRowSpan, offsetX, frozenTopDelta, new Rect(frozenStripWidth, 0, viewWidth - frozenStripWidth, frozenStripHeight), false);
+                    RenderRegion(context, left, frozenTop, width, frozenRowSpan, offsetX, frozenTopDelta, new Rect(frozenStripWidth, 0, viewWidth - frozenStripWidth, frozenStripHeight), false, false, true);
                 }
 
                 // 3. scrollable rows, frozen columns.
                 if (frozenStripWidth > 0)
                 {
-                    RenderRegion(context, frozenLeft, top, frozenColumnSpan, height, frozenLeftDelta, offsetY, new Rect(0, frozenStripHeight, frozenStripWidth, viewHeight - frozenStripHeight), false);
+                    RenderRegion(context, frozenLeft, top, frozenColumnSpan, height, frozenLeftDelta, offsetY, new Rect(0, frozenStripHeight, frozenStripWidth, viewHeight - frozenStripHeight), false, true, false);
                 }
 
                 // 4. frozen rows and frozen columns.
                 if (frozenStripWidth > 0 && frozenStripHeight > 0)
                 {
-                    RenderRegion(context, frozenLeft, frozenTop, frozenColumnSpan, frozenRowSpan, frozenLeftDelta, frozenTopDelta, new Rect(0, 0, frozenStripWidth, frozenStripHeight), false);
+                    RenderRegion(context, frozenLeft, frozenTop, frozenColumnSpan, frozenRowSpan, frozenLeftDelta, frozenTopDelta, new Rect(0, 0, frozenStripWidth, frozenStripHeight), false, true, true);
                 }
 
                 _ = Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
@@ -2997,7 +2997,9 @@ namespace Spreadalonia
         /// <param name="offsetY">The vertical translation applied to the region.</param>
         /// <param name="region">The region of the viewport covered by this region, in screen coordinates.</param>
         /// <param name="isMainRegion"><see langword="true"/> for the scrollable region, which owns the hit testing data.</param>
-        private void RenderRegion(DrawingContext context, int left, int top, int width, int height, double offsetX, double offsetY, Rect region, bool isMainRegion)
+        /// <param name="frozenColumns"><see langword="true"/> when the region draws the frozen column strip.</param>
+        /// <param name="frozenRows"><see langword="true"/> when the region draws the frozen row strip.</param>
+        private void RenderRegion(DrawingContext context, int left, int top, int width, int height, double offsetX, double offsetY, Rect region, bool isMainRegion, bool frozenColumns, bool frozenRows)
         {
             Pen gridPen = new Pen(new SolidColorBrush(GridColor));
                 Pen blackPen = new Pen(Brushes.Black);
@@ -3483,6 +3485,23 @@ namespace Spreadalonia
                                 // Only skip merges that are entirely outside the visible range
                                 if (mergedRange.Right < left || mergedRange.Left > left + width ||
                                     mergedRange.Bottom < top || mergedRange.Top > top + height)
+                                {
+                                    continue;
+                                }
+
+                                // A merged range that crosses the frozen column / row boundary would
+                                // otherwise be rendered twice (once by the frozen strip region, once by
+                                // the scrollable region), repeating its text on both sides of the
+                                // separator and letting the two copies drift apart while column widths
+                                // change. Such a range is therefore only drawn by the region that
+                                // contains its anchor side (the frozen strip it starts in); the other
+                                // region just leaves the rest of the merged area blank.
+                                if (frozenStripWidth > 0 && frozenColumns != (mergedRange.Left < frozenColumnCount))
+                                {
+                                    continue;
+                                }
+
+                                if (frozenStripHeight > 0 && frozenRows != (mergedRange.Top < frozenRowCount))
                                 {
                                     continue;
                                 }

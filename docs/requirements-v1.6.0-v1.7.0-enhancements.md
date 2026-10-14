@@ -1,4 +1,4 @@
-# Spreadalonia 增强批次验收记录 v1.6.0 – v1.7.2
+# Spreadalonia 增强批次验收记录 v1.6.0 – v1.7.3
 ## 目标：补齐 SSFinance 从 WPF（ReoGrid）迁移到 Avalonia（Spreadalonia）的四项能力
 
 > 本文档记录本批次（列隐藏、辅助项选择单元格、冻结行列、树形展开/折叠动画）的需求、API 与验收结果。
@@ -16,6 +16,7 @@
 | 1.7.0 | TreeGradeCell 展开/折叠动画 | P2 | 已完成并验证 |
 | 1.7.1 | ButtonCell 图标模式（RefCell 风格） | P1 | 已完成并验证 |
 | 1.7.2 | 数值单元格省略号截断（NumericCell / NumericLinkCell） | P1 | 已完成并验证 |
+| 1.7.3 | 合并单元格跨冻结边界重复渲染修复 | P0 | 已完成并验证 |
 
 ---
 
@@ -152,8 +153,33 @@
 
 ---
 
+## 七、合并单元格跨冻结边界重复渲染修复（v1.7.3）
+
+冻结前两列、第一行标题合并（如 `A1:D1` 显示"试算平衡表"）时，标题会在冻结区分隔线两侧
+各绘制一次，调整列宽时两份文本还会各自错位漂移。
+
+### 根因
+- `Table.Render` 按四象限（滚动区 / 冻结行区 / 冻结列区 / 冻结角区）分别调用 `RenderRegion`，
+  每个区域都绘制与自身范围相交的合并单元格。
+- 跨冻结边界的合并单元格同时与冻结区、滚动区相交 → 文本被绘制两份；列宽变化时
+  两区域按各自偏移重算，导致错位漂移。
+
+### 行为（修复后）
+- `RenderRegion` 新增 `frozenColumns` / `frozenRows` 标志；绘制合并单元格前做归属判断：
+  只有在冻结列一侧起始的合并区（`Left < FrozenColumnCount`）才由冻结列区域绘制，
+  滚动区不再绘制（内部网格线依旧被 `GetVisibleLineSegments` 跳过，与 Excel 一致）。
+- 冻结行一侧同理（`Top < FrozenRowCount`）。
+- 不冻结、或合并区不跨边界时行为完全不变（两个判断仅在冻结条带存在且跨界时生效）。
+
+### 验收
+- 新增 `--freeze-merge-test`：`Data.Clear()` 后构建"试算平衡表"（`A1:D1` 合并，冻结 2 列），
+  三张截图分别覆盖初始状态、加宽冻结列 B、加宽滚动列 C，标题均只绘制一次且无漂移。
+- `--freeze-panes-test`、`--hidden-column-test` 回归通过。
+
+---
+
 ## 回归清单（每批次执行）
 
 - `dotnet build Spreadalonia.sln` 过滤 `error CS` 无输出，`read_lints` 干净。
-- Demo 截图冒烟：`--tree-cell-test`、`--hidden-column-test`、`--freeze-panes-test`、`--tree-animation-test`、`--numeric-ellipsis-test`。
+- Demo 截图冒烟：`--tree-cell-test`、`--hidden-column-test`、`--freeze-panes-test`、`--tree-animation-test`、`--numeric-ellipsis-test`、`--freeze-merge-test`。
 - 既有 API（`HiddenRows`、`SetRowVisible`、`TitleCell`、`LinkCell`、`NumericCell`）行为不变。
