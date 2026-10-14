@@ -1,4 +1,4 @@
-# Spreadalonia 增强批次验收记录 v1.6.0 – v1.7.3
+# Spreadalonia 增强批次验收记录 v1.6.0 – v1.7.4
 ## 目标：补齐 SSFinance 从 WPF（ReoGrid）迁移到 Avalonia（Spreadalonia）的四项能力
 
 > 本文档记录本批次（列隐藏、辅助项选择单元格、冻结行列、树形展开/折叠动画）的需求、API 与验收结果。
@@ -17,6 +17,7 @@
 | 1.7.1 | ButtonCell 图标模式（RefCell 风格） | P1 | 已完成并验证 |
 | 1.7.2 | 数值单元格省略号截断（NumericCell / NumericLinkCell） | P1 | 已完成并验证 |
 | 1.7.3 | 合并单元格跨冻结边界重复渲染修复 | P0 | 已完成并验证 |
+| 1.7.4 | 跨冻结边界合并单元格整体居中 + 冻结态表头拖拽改尺寸修复 | P0 | 已完成并验证 |
 
 ---
 
@@ -175,6 +176,36 @@
 - 新增 `--freeze-merge-test`：`Data.Clear()` 后构建"试算平衡表"（`A1:D1` 合并，冻结 2 列），
   三张截图分别覆盖初始状态、加宽冻结列 B、加宽滚动列 C，标题均只绘制一次且无漂移。
 - `--freeze-panes-test`、`--hidden-column-test` 回归通过。
+
+---
+
+## 八、跨冻结边界合并单元格整体居中 + 冻结态表头拖拽修复（v1.7.4）
+
+v1.7.3 消除了重复绘制，但标题文本不再跨冻结分隔线居中（各区域按自身可见片段居中），
+且冻结后最右侧列无法拖拽调整宽度。
+
+### 根因
+- `RenderRegion` 用「本区域与合并区的交集」`visibleMerge` 作为居中矩形，合并区只有一部分
+  落入该区域时，文本按可见片段居中而非按整个合并区居中。
+- 合并区右/下边界越出当前绘制范围时，累加列宽从 `left + width` 起算，
+  而 `xs[width]` 已包含该列，重复计入一列（差一错误）。
+- `HorizontalHeader` / `VerticalHeader` 拖拽时：
+  1. 位于冻结条带的位置仍减去滚动偏移（`lastDrawnDelta`），导致坐标错位；
+  2. 用 `lastDrawnXs[clickedColumn - 1]` 取左边缘，隐含「绘制切片从第 0 列开始」，
+     冻结后切片从 `FrozenColumnCount` 开始，索引整体偏移 → 抓不到最右列的右边缘。
+
+### 行为（修复后）
+- 合并单元格统一按**整个合并区**的几何位置计算矩形：`mergeX0/mergeX1`、`mergeY0/mergeY1`
+  由 `xs/ys` 与 `GetWidth/GetHeight` 推导出完整范围（含越出当前区域的部分），
+  各区域只负责绘制落在自己裁剪范围内的那部分，文本连续且居中，`TitleCell`/`LinkCell`/普通文本一致。
+- 表头拖拽：冻结条带使用表格坐标（`IsOverFrozenColumns` / `GetFrozenColumnIndex` / `GetColumnStart`，
+  行方向同理），滚动切片按 `lastDrawnLeft` / `lastDrawnTop` 修正索引偏移。
+
+### 验收
+- Demo 新增「Freeze + Merged Title Demo」按钮，与 `--freeze-merge-test` 共用同一方法
+  `LoadFreezeMergeDemo()`，可交互验证：标题跨冻结线居中且只有一份，可拖动任意列分隔线（含最右列）。
+- `--freeze-merge-test`、`--freeze-panes-test`、`--hidden-column-test`、`--tree-cell-test`、
+  `--numeric-ellipsis-test` 回归通过。
 
 ---
 

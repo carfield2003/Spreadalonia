@@ -3489,21 +3489,64 @@ namespace Spreadalonia
                                     continue;
                                 }
 
-                                // A merged range that crosses the frozen column / row boundary would
-                                // otherwise be rendered twice (once by the frozen strip region, once by
-                                // the scrollable region), repeating its text on both sides of the
-                                // separator and letting the two copies drift apart while column widths
-                                // change. Such a range is therefore only drawn by the region that
-                                // contains its anchor side (the frozen strip it starts in); the other
-                                // region just leaves the rest of the merged area blank.
-                                if (frozenStripWidth > 0 && frozenColumns != (mergedRange.Left < frozenColumnCount))
+                                // The merged text is centred over the *whole* merged range, even
+                                // when part of the range falls outside this region (e.g. a merged
+                                // title that crosses the frozen column boundary): each region draws
+                                // its own portion of the same centred text, clipped to its area, so
+                                // the text stays continuous across the frozen separator instead of
+                                // being duplicated or re-centred on each side.
+                                double mergeX0;
+                                double mergeX1;
+
+                                if (mergedRange.Left < left)
                                 {
-                                    continue;
+                                    double w = 0;
+                                    for (int c = mergedRange.Left; c < left; c++) { w += GetWidth(c); }
+                                    mergeX0 = -w;
+                                }
+                                else
+                                {
+                                    mergeX0 = mergedRange.Left == left ? 0 : xs[mergedRange.Left - left - 1];
                                 }
 
-                                if (frozenStripHeight > 0 && frozenRows != (mergedRange.Top < frozenRowCount))
+                                if (mergedRange.Right >= left + width)
                                 {
-                                    continue;
+                                    double w = 0;
+                                    // xs[width] already includes column left+width, so the extra
+                                    // columns start at left+width+1.
+                                    for (int c = left + width + 1; c <= mergedRange.Right; c++) { w += GetWidth(c); }
+                                    mergeX1 = xs[width] + w;
+                                }
+                                else
+                                {
+                                    mergeX1 = xs[mergedRange.Right - left];
+                                }
+
+                                double mergeY0;
+                                double mergeY1;
+
+                                if (mergedRange.Top < top)
+                                {
+                                    double h = 0;
+                                    for (int r = mergedRange.Top; r < top; r++) { h += GetHeight(r); }
+                                    mergeY0 = -h;
+                                }
+                                else
+                                {
+                                    mergeY0 = mergedRange.Top == top ? 0 : ys[mergedRange.Top - top - 1];
+                                }
+
+                                if (mergedRange.Bottom >= top + height)
+                                {
+                                    double h = 0;
+                                    // ys[height] already includes row top+height, so the extra
+                                    // rows start at top+height+1.
+                                    for (int r = top + height + 1; r <= mergedRange.Bottom; r++) { h += GetHeight(r); }
+                                    mergeY1 = ys[height] + h;
+                                }
+                                else
+                                {
+                                    mergeY1 = ys[mergedRange.Bottom - top];
                                 }
 
                                 bool hasMergedData = Data.TryGetValue((mergedRange.Left, mergedRange.Top), out string mergedText);
@@ -3522,26 +3565,14 @@ namespace Spreadalonia
                                 // Title cells render their own content over the whole merged range.
                                 if (hasMergedTitleCell)
                                 {
-                                    SelectionRange titleVisibleMerge = mergedRange.Intersection(new SelectionRange(left, top, left + width, top + height));
-
-                                    double titleMergeX0 = titleVisibleMerge.Left == left ? 0 : xs[titleVisibleMerge.Left - left - 1];
-                                    double titleMergeY0 = titleVisibleMerge.Top == top ? 0 : ys[titleVisibleMerge.Top - top - 1];
-                                    double titleMergeX1 = titleVisibleMerge.Right - left < width ? xs[titleVisibleMerge.Right - left] : xs[width];
-                                    double titleMergeY1 = titleVisibleMerge.Bottom - top < height ? ys[titleVisibleMerge.Bottom - top] : ys[height];
-
-                                    mergedTitleCell.Render(context, new Rect(titleMergeX0, titleMergeY0, titleMergeX1 - titleMergeX0, titleMergeY1 - titleMergeY0), null, null);
+                                    mergedTitleCell.Render(context, new Rect(mergeX0, mergeY0, mergeX1 - mergeX0, mergeY1 - mergeY0), null, null);
                                     continue;
                                 }
 
                                 // Link cells render a clickable hyperlink over the whole merged range.
                                 if (hasMergedLinkCell)
                                 {
-                                    SelectionRange linkVisibleMerge = mergedRange.Intersection(new SelectionRange(left, top, left + width, top + height));
 
-                                    double linkMergeX0 = linkVisibleMerge.Left == left ? 0 : xs[linkVisibleMerge.Left - left - 1];
-                                    double linkMergeY0 = linkVisibleMerge.Top == top ? 0 : ys[linkVisibleMerge.Top - top - 1];
-                                    double linkMergeX1 = linkVisibleMerge.Right - left < width ? xs[linkVisibleMerge.Right - left] : xs[width];
-                                    double linkMergeY1 = linkVisibleMerge.Bottom - top < height ? ys[linkVisibleMerge.Bottom - top] : ys[height];
 
                                     if (!CellTypefaces.TryGetValue((mergedRange.Left, mergedRange.Top), out Typeface mergedLinkFace) &&
                                         !RowTypefaces.TryGetValue(mergedRange.Top, out mergedLinkFace) &&
@@ -3574,7 +3605,7 @@ namespace Spreadalonia
                                         mergedLinkMargin = mergedCustomLinkMargin;
                                     }
 
-                                    mergedLinkCell.Render(context, new Rect(linkMergeX0, linkMergeY0, linkMergeX1 - linkMergeX0, linkMergeY1 - linkMergeY0), null, mergedLinkMargin, mergedText, mergedLinkFace, mergedLinkFontSize, mergedLinkHor, mergedLinkVer);
+                                    mergedLinkCell.Render(context, new Rect(mergeX0, mergeY0, mergeX1 - mergeX0, mergeY1 - mergeY0), null, mergedLinkMargin, mergedText, mergedLinkFace, mergedLinkFontSize, mergedLinkHor, mergedLinkVer);
                                     continue;
                                 }
 
@@ -3622,13 +3653,13 @@ namespace Spreadalonia
                                     mergedMargin = mergedCustomMargin;
                                 }
 
-                                // Clip the merged range to the visible area so partial merges still render
-                                SelectionRange visibleMerge = mergedRange.Intersection(new SelectionRange(left, top, left + width, top + height));
-
-                                double mergedX0 = visibleMerge.Left == left ? 0 : xs[visibleMerge.Left - left - 1];
-                                double mergedY0 = visibleMerge.Top == top ? 0 : ys[visibleMerge.Top - top - 1];
-                                double mergedX1 = visibleMerge.Right - left < width ? xs[visibleMerge.Right - left] : xs[width];
-                                double mergedY1 = visibleMerge.Bottom - top < height ? ys[visibleMerge.Bottom - top] : ys[height];
+                                // Clip the merged range so the text never spills over neighbouring
+                                // cells; the clip covers the whole merged range, while the region clip
+                                // already limits the drawing to the visible part of this region.
+                                double mergedX0 = mergeX0;
+                                double mergedY0 = mergeY0;
+                                double mergedX1 = mergeX1;
+                                double mergedY1 = mergeY1;
 
                                 FormattedText mergedFormattedText = new FormattedText(mergedDisplayText, CultureInfo.CurrentCulture, FlowDirection.LeftToRight, mergedFace, mergedFontSize, mergedBrush);
 

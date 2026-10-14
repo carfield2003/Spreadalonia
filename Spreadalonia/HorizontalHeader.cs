@@ -227,9 +227,14 @@ namespace Spreadalonia
             double closest = double.MaxValue;
             int clickedColumn = -1;
 
-            double xPos = currentPoint.Position.X - lastDrawnDelta;
+            // Over the frozen strip the drawn coordinates are the table coordinates themselves
+            // (the strip is drawn from its own unscrolled origin starting at column 0); elsewhere
+            // they are the coordinates of the scrollable slice, translated by its drawn offset.
+            bool overFrozen = Owner != null && Owner.IsOverFrozenColumns(currentPoint.Position.X);
 
-            if (lastDrawnXs != null)
+            double xPos = overFrozen ? currentPoint.Position.X : currentPoint.Position.X - lastDrawnDelta;
+
+            if (lastDrawnXs != null && !overFrozen)
             {
                 for (int i = 0; i < lastDrawnXs.Length; i++)
                 {
@@ -249,9 +254,14 @@ namespace Spreadalonia
 
             // The frozen columns are drawn with their own (unscrolled) origin, so the hit test above
             // does not describe them: resolve the column index from the frozen strip directly.
-            if (Owner != null && Owner.IsOverFrozenColumns(currentPoint.Position.X))
+            if (overFrozen)
             {
                 clickedColumn = Owner.GetFrozenColumnIndex(currentPoint.Position.X);
+
+                for (int i = 0; i <= Owner.FrozenColumnCount; i++)
+                {
+                    closest = Math.Min(closest, Math.Abs(Owner.GetColumnStart(i) - currentPoint.Position.X));
+                }
             }
 
 
@@ -317,9 +327,13 @@ namespace Spreadalonia
 
             PointerPoint currentPoint = e.GetCurrentPoint(this);
 
-            double xPos = currentPoint.Position.X - lastDrawnDelta;
+            // Same coordinate rules as OnPointerMoved: raw table coordinates over the frozen
+            // strip, scrollable slice coordinates elsewhere.
+            bool overFrozen = Owner != null && Owner.IsOverFrozenColumns(currentPoint.Position.X);
 
-            if (lastDrawnXs != null)
+            double xPos = overFrozen ? currentPoint.Position.X : currentPoint.Position.X - lastDrawnDelta;
+
+            if (lastDrawnXs != null && !overFrozen)
             {
                 for (int i = 0; i < lastDrawnXs.Length; i++)
                 {
@@ -339,9 +353,14 @@ namespace Spreadalonia
 
             // The frozen columns are drawn with their own (unscrolled) origin, so the hit test above
             // does not describe them: resolve the column index from the frozen strip directly.
-            if (Owner != null && Owner.IsOverFrozenColumns(currentPoint.Position.X))
+            if (overFrozen)
             {
                 clickedColumn = Owner.GetFrozenColumnIndex(currentPoint.Position.X);
+
+                for (int i = 0; i <= Owner.FrozenColumnCount; i++)
+                {
+                    closest = Math.Min(closest, Math.Abs(Owner.GetColumnStart(i) - currentPoint.Position.X));
+                }
             }
 
 
@@ -406,10 +425,12 @@ namespace Spreadalonia
                 else
                 {
                     // In the frozen strip the left edge of the column is its table coordinate: the
-                    // drawn coordinates of the scrollable slice do not apply there.
+                    // drawn coordinates of the scrollable slice do not apply there. Inside the
+                    // scrollable slice the drawn coordinates are relative to the first drawn
+                    // column, which is not column 0 when columns are frozen.
                     double columnLeftEdge = Owner != null && Owner.IsOverFrozenColumns(currentPoint.Position.X)
-                        ? Owner.GetColumnStart(clickedColumn) - lastDrawnDelta
-                        : (clickedColumn > 0 ? lastDrawnXs[clickedColumn - 1] : 0);
+                        ? Owner.GetColumnStart(clickedColumn)
+                        : (clickedColumn > lastDrawnLeft ? lastDrawnXs[clickedColumn - lastDrawnLeft - 1] : 0);
 
                     if (xPos - columnLeftEdge <= 5)
                     {

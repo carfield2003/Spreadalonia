@@ -200,9 +200,14 @@ namespace Spreadalonia
             double closest = double.MaxValue;
             int clickedRow = -1;
 
-            double yPos = currentPoint.Position.Y - lastDrawnDelta;
+            // Over the frozen strip the drawn coordinates are the table coordinates themselves
+            // (the strip is drawn from its own unscrolled origin starting at row 0); elsewhere
+            // they are the coordinates of the scrollable slice, translated by its drawn offset.
+            bool overFrozen = Owner != null && Owner.IsOverFrozenRows(currentPoint.Position.Y);
 
-            if (lastDrawnYs != null)
+            double yPos = overFrozen ? currentPoint.Position.Y : currentPoint.Position.Y - lastDrawnDelta;
+
+            if (lastDrawnYs != null && !overFrozen)
             {
                 for (int i = 0; i < lastDrawnYs.Length; i++)
                 {
@@ -222,9 +227,14 @@ namespace Spreadalonia
 
             // The frozen rows are drawn with their own (unscrolled) origin, so the hit test above does
             // not describe them: resolve the row index from the frozen strip directly.
-            if (Owner != null && Owner.IsOverFrozenRows(currentPoint.Position.Y))
+            if (overFrozen)
             {
                 clickedRow = Owner.GetFrozenRowIndex(currentPoint.Position.Y);
+
+                for (int i = 0; i <= Owner.FrozenRowCount; i++)
+                {
+                    closest = Math.Min(closest, Math.Abs(Owner.GetRowStart(i) - currentPoint.Position.Y));
+                }
             }
 
 
@@ -290,9 +300,13 @@ namespace Spreadalonia
 
             PointerPoint currentPoint = e.GetCurrentPoint(this);
 
-            double yPos = currentPoint.Position.Y - lastDrawnDelta;
+            // Same coordinate rules as OnPointerMoved: raw table coordinates over the frozen
+            // strip, scrollable slice coordinates elsewhere.
+            bool overFrozen = Owner != null && Owner.IsOverFrozenRows(currentPoint.Position.Y);
 
-            if (lastDrawnYs != null)
+            double yPos = overFrozen ? currentPoint.Position.Y : currentPoint.Position.Y - lastDrawnDelta;
+
+            if (lastDrawnYs != null && !overFrozen)
             {
                 for (int i = 0; i < lastDrawnYs.Length; i++)
                 {
@@ -312,9 +326,14 @@ namespace Spreadalonia
 
             // The frozen rows are drawn with their own (unscrolled) origin, so the hit test above does
             // not describe them: resolve the row index from the frozen strip directly.
-            if (Owner != null && Owner.IsOverFrozenRows(currentPoint.Position.Y))
+            if (overFrozen)
             {
                 clickedRow = Owner.GetFrozenRowIndex(currentPoint.Position.Y);
+
+                for (int i = 0; i <= Owner.FrozenRowCount; i++)
+                {
+                    closest = Math.Min(closest, Math.Abs(Owner.GetRowStart(i) - currentPoint.Position.Y));
+                }
             }
 
 
@@ -379,10 +398,12 @@ namespace Spreadalonia
                 else
                 {
                     // In the frozen strip the top edge of the row is its table coordinate: the drawn
-                    // coordinates of the scrollable slice do not apply there.
+                    // coordinates of the scrollable slice do not apply there. Inside the scrollable
+                    // slice the drawn coordinates are relative to the first drawn row, which is not
+                    // row 0 when rows are frozen.
                     double rowTopEdge = Owner != null && Owner.IsOverFrozenRows(currentPoint.Position.Y)
-                        ? Owner.GetRowStart(clickedRow) - lastDrawnDelta
-                        : (clickedRow > 0 ? lastDrawnYs[clickedRow - 1] : 0);
+                        ? Owner.GetRowStart(clickedRow)
+                        : (clickedRow > lastDrawnTop ? lastDrawnYs[clickedRow - lastDrawnTop - 1] : 0);
 
                     if (yPos - rowTopEdge <= 5)
                     {

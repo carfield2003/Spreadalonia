@@ -298,35 +298,7 @@ namespace Demo
                     {
                         await System.Threading.Tasks.Task.Delay(500);
 
-                        var data = new Dictionary<(int, int), string>
-                        {
-                            [(0, 0)] = "试算平衡表",
-                            [(0, 1)] = "科目编码",
-                            [(1, 1)] = "科目名称",
-                            [(2, 1)] = "年初余额",
-                            [(2, 2)] = "借方",
-                            [(3, 2)] = "贷方",
-                            [(0, 3)] = "101",
-                            [(1, 3)] = "现金",
-                            [(0, 4)] = "102",
-                            [(1, 4)] = "银行存款",
-                            [(0, 5)] = "113",
-                            [(1, 5)] = "应收账款",
-                            [(0, 6)] = "116",
-                            [(1, 6)] = "固定资产",
-                            [(0, 7)] = "118",
-                            [(1, 7)] = "存货",
-                        };
-                        // SetData merges into the existing sheet, so start from a blank one.
-                        SpreadsheetControl.Data.Clear();
-                        SpreadsheetControl.SetData(data);
-                        SpreadsheetControl.MergedRanges = new List<SelectionRange>
-                        {
-                            new SelectionRange(0, 0, 3, 0), // title across the frozen boundary (A:B frozen)
-                            new SelectionRange(2, 1, 3, 1), // 年初余额 header inside the scrollable columns
-                        };
-                        SpreadsheetControl.FreezePanes(0, 2);
-                        SpreadsheetControl.Refresh();
+                        LoadFreezeMergeDemo();
                         await System.Threading.Tasks.Task.Delay(600);
                         SaveScreenshot(@"C:\Users\89664\Desktop\freeze_merge_initial.png");
                         Console.WriteLine("[Test] Freeze + merged title screenshot saved.");
@@ -1450,6 +1422,71 @@ namespace Demo
 
             SpreadsheetControl.Refresh();
             Console.WriteLine($"[CellTapped] ({column}, {row}) -> '{next}' written back.");
+        }
+
+        private void FreezeMergeButton_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+        {
+            LoadFreezeMergeDemo();
+        }
+
+        /// <summary>
+        /// Builds the small 试算平衡表 sheet used by the "--freeze-merge-test" screenshot test: the
+        /// row-1 title is merged over columns A..D while only A:B are frozen, so the merged cell
+        /// crosses the frozen column boundary. Used by the demo button above and by the automated
+        /// screenshot test, so both always show exactly the same scene.
+        /// </summary>
+        private void LoadFreezeMergeDemo()
+        {
+            SpreadsheetControl.MergedRanges = null;
+            SpreadsheetControl.CellBackgrounds = null;
+            SpreadsheetControl.CellBorders = null;
+            SpreadsheetControl.MaxTableWidth = int.MaxValue - 2;
+            SpreadsheetControl.MaxTableHeight = int.MaxValue - 2;
+            SpreadsheetControl.CellFontSize?.Clear();
+            SpreadsheetControl.CellTypefaces?.Clear();
+            SpreadsheetControl.CellForeground?.Clear();
+            SpreadsheetControl.CellTextAlignment?.Clear();
+            SpreadsheetControl.CellVerticalAlignment?.Clear();
+            SpreadsheetControl.CellMargin?.Clear();
+            SpreadsheetControl.TitleCells?.Clear();
+            SpreadsheetControl.LinkCells?.Clear();
+            SpreadsheetControl.TreeCells?.Clear();
+            SpreadsheetControl.NumericCells?.Clear();
+            SpreadsheetControl.ButtonCells?.Clear();
+            SpreadsheetControl.ClearContent();
+
+            SpreadsheetControl.ShowAllRows();
+            SpreadsheetControl.ShowAllColumns();
+            SpreadsheetControl.UnfreezePanes();
+
+            var data = new Dictionary<(int, int), string>
+            {
+                [(0, 0)] = "试算平衡表",
+                [(0, 1)] = "科目编码",
+                [(1, 1)] = "科目名称",
+                [(2, 1)] = "年初余额",
+                [(2, 2)] = "借方",
+                [(3, 2)] = "贷方",
+                [(0, 3)] = "101",
+                [(1, 3)] = "现金",
+                [(0, 4)] = "102",
+                [(1, 4)] = "银行存款",
+                [(0, 5)] = "113",
+                [(1, 5)] = "应收账款",
+                [(0, 6)] = "116",
+                [(1, 6)] = "固定资产",
+                [(0, 7)] = "118",
+                [(1, 7)] = "存货",
+            };
+
+            SpreadsheetControl.SetData(data);
+            SpreadsheetControl.MergedRanges = new List<SelectionRange>
+            {
+                new SelectionRange(0, 0, 3, 0), // title across the frozen boundary (A:B frozen)
+                new SelectionRange(2, 1, 3, 1), // 年初余额 header inside the scrollable columns
+            };
+            SpreadsheetControl.FreezePanes(0, 2);
+            SpreadsheetControl.Refresh();
         }
 
         /// <summary>
