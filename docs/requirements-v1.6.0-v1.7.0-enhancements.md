@@ -1,4 +1,4 @@
-# Spreadalonia 增强批次验收记录 v1.6.0 – v1.7.1
+# Spreadalonia 增强批次验收记录 v1.6.0 – v1.7.2
 ## 目标：补齐 SSFinance 从 WPF（ReoGrid）迁移到 Avalonia（Spreadalonia）的四项能力
 
 > 本文档记录本批次（列隐藏、辅助项选择单元格、冻结行列、树形展开/折叠动画）的需求、API 与验收结果。
@@ -15,6 +15,7 @@
 | 1.6.1 | 冻结行列（FreezePanes） | P1 | 已完成并验证 |
 | 1.7.0 | TreeGradeCell 展开/折叠动画 | P2 | 已完成并验证 |
 | 1.7.1 | ButtonCell 图标模式（RefCell 风格） | P1 | 已完成并验证 |
+| 1.7.2 | 数值单元格省略号截断（NumericCell / NumericLinkCell） | P1 | 已完成并验证 |
 
 ---
 
@@ -129,8 +130,30 @@
 
 ---
 
+## 六、数值省略号截断（v1.7.2）
+
+参照 SSFinance（WPF）：格式化后的数值显示不下（列宽不足）时，右侧显示省略号
+（如 `1,120,7…`、`104,500…`），而不是把字符裁掉一半。
+
+### 行为
+- `NumericCell`（Table 主渲染路径）：格式化文本宽度超过单元格可用宽度时，
+  二分查找能放下的最长前缀，尾部追加 "…" 重绘；放不下省略号本身时维持原裁剪。
+- `NumericLinkCell`（`LinkCell.Render`）：`LinkCell` 新增虚属性
+  `UseEllipsisWhenClipped`（默认 `false`，普通链接保持原裁剪行为），
+  `NumericLinkCell` 覆写为 `true`。
+- 共享实现：`Spreadalonia/TextTruncation.cs`（internal，测量复用单元格字体/字号）。
+- 右对齐随截断后的宽度重新计算；删除线（Strikethrough）、负数红色等修饰跟随。
+- 值能完整显示时行为完全不变（如 `9,025.00`）。
+
+### 验收
+- 新增 `--numeric-ellipsis-test`：两列 64px 窄列（NumericCell / NumericLinkCell），
+  大值显示 `1,120,7…` / `282,04…`，小值 `9,025.00` 完整，负值红色正常；
+  其余四组截图回归全部通过。
+
+---
+
 ## 回归清单（每批次执行）
 
 - `dotnet build Spreadalonia.sln` 过滤 `error CS` 无输出，`read_lints` 干净。
-- Demo 截图冒烟：`--tree-cell-test`、`--hidden-column-test`、`--freeze-panes-test`、`--tree-animation-test`。
+- Demo 截图冒烟：`--tree-cell-test`、`--hidden-column-test`、`--freeze-panes-test`、`--tree-animation-test`、`--numeric-ellipsis-test`。
 - 既有 API（`HiddenRows`、`SetRowVisible`、`TitleCell`、`LinkCell`、`NumericCell`）行为不变。

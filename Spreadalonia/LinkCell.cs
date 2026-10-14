@@ -74,6 +74,12 @@ namespace Spreadalonia
         internal Rect HitRect { get; set; }
 
         /// <summary>
+        /// Whether the display text is truncated with a trailing ellipsis ("…") when it does not
+        /// fit into the cell, instead of being clipped mid-glyph.
+        /// </summary>
+        protected virtual bool UseEllipsisWhenClipped => false;
+
+        /// <summary>
         /// Creates a new empty <see cref="LinkCell"/>.
         /// </summary>
         public LinkCell() : this("", "{}", false)
@@ -172,6 +178,31 @@ namespace Spreadalonia
                 {
                     HitRect = default;
                     return;
+                }
+            }
+
+            // When the display text does not fit into the cell, truncate it with a trailing
+            // ellipsis ("1,120,7…") instead of letting the regular clipping cut it mid-glyph.
+            double availableWidth = Math.Max(0, bounds.Width - pad.Left - pad.Right);
+
+            if (textWidth > availableWidth && UseEllipsisWhenClipped)
+            {
+                string truncated = TextTruncation.TruncateWithEllipsis(text, typeface, fontSize, brush, availableWidth);
+
+                if (truncated != text)
+                {
+                    text = truncated;
+
+                    try
+                    {
+                        fmtText = CreateFormattedText(text, typeface, fontSize, brush);
+                        textWidth = fmtText.Width;
+                        textHeight = fmtText.Height;
+                    }
+                    catch
+                    {
+                        // Measurement of the truncated text failed; keep the original one.
+                    }
                 }
             }
 
@@ -302,6 +333,9 @@ namespace Spreadalonia
             Strikethrough = strikethrough;
             Digits = digits;
         }
+
+        /// <inheritdoc/>
+        protected override bool UseEllipsisWhenClipped => true;
 
         /// <inheritdoc/>
         internal override string GetDisplayText(string rawData)

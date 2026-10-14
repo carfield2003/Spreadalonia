@@ -3397,6 +3397,26 @@ namespace Spreadalonia
                                             }
                                         }
 
+                                        // When a formatted numeric value does not fit into the column, show a
+                                        // trailing ellipsis ("1,120,7…") instead of clipping it mid-glyph, like
+                                        // the WPF reference (SSFinance) does.
+                                        if (activeNumericCell != null && colourBrush == null)
+                                        {
+                                            double availableWidth = xs[x] - realX - margin.Left - margin.Right;
+
+                                            if (textWidth > availableWidth)
+                                            {
+                                                string truncated = TextTruncation.TruncateWithEllipsis(displayText, face, cellFontSize, brs, availableWidth);
+
+                                                if (truncated != displayText)
+                                                {
+                                                    displayText = truncated;
+                                                    fmtText = new FormattedText(displayText, CultureInfo.CurrentCulture, FlowDirection.LeftToRight, face, cellFontSize, brs);
+                                                    textWidth = fmtText.Width;
+                                                }
+                                            }
+                                        }
+
                                         using (context.PushClip(new Rect(realX + margin.Left, realY + margin.Top, xs[x] - realX - margin.Left - margin.Right, ys[y] - realY - margin.Top - margin.Bottom)))
                                         {
                                             if (ver == VerticalAlignment.Top)

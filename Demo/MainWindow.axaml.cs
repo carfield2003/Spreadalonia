@@ -160,6 +160,91 @@ namespace Demo
                 };
             }
 
+            // Automated screenshot test for the numeric ellipsis truncation: narrow columns show
+            // "1,120,7…" style ellipses instead of clipping the formatted value mid-glyph, for
+            // both NumericCell and NumericLinkCell.
+            if (Environment.GetCommandLineArgs().Any(a => a == "--numeric-ellipsis-test"))
+            {
+                Opened += async (_, _) =>
+                {
+                    try
+                    {
+                        await System.Threading.Tasks.Task.Delay(500);
+
+                        SpreadsheetControl.MergedRanges = null;
+                        SpreadsheetControl.CellBackgrounds = null;
+                        SpreadsheetControl.CellBorders = null;
+                        SpreadsheetControl.MaxTableWidth = 3;
+                        SpreadsheetControl.MaxTableHeight = int.MaxValue - 2;
+                        SpreadsheetControl.TitleCells?.Clear();
+                        SpreadsheetControl.LinkCells?.Clear();
+                        SpreadsheetControl.TreeCells?.Clear();
+                        SpreadsheetControl.NumericCells?.Clear();
+                        SpreadsheetControl.ButtonCells?.Clear();
+                        SpreadsheetControl.CellFontSize?.Clear();
+                        SpreadsheetControl.CellTypefaces?.Clear();
+                        SpreadsheetControl.CellForeground?.Clear();
+                        SpreadsheetControl.CellTextAlignment?.Clear();
+                        SpreadsheetControl.CellVerticalAlignment?.Clear();
+                        SpreadsheetControl.CellMargin?.Clear();
+                        SpreadsheetControl.ClearContent();
+                        SpreadsheetControl.UnfreezePanes();
+                        SpreadsheetControl.ShowAllRows();
+                        SpreadsheetControl.ShowAllColumns();
+
+                        var data = new Dictionary<(int, int), string>
+                        {
+                            [(0, 0)] = "编码", [(1, 0)] = "期初余额", [(2, 0)] = "调整金额",
+                            [(0, 1)] = "101",  [(1, 1)] = "1120700.00", [(2, 1)] = "1120700.5",
+                            [(0, 2)] = "102",  [(1, 2)] = "564773",      [(2, 2)] = "56477.36",
+                            [(0, 3)] = "113",  [(1, 3)] = "104500.12",   [(2, 3)] = "104500.12",
+                            [(0, 4)] = "115",  [(1, 4)] = "2820435.55",  [(2, 4)] = "282043.55",
+                            [(0, 5)] = "118",  [(1, 5)] = "9025.00",     [(2, 5)] = "9025.00",
+                            [(0, 6)] = "119",  [(1, 6)] = "-4500.5",     [(2, 6)] = "-4500.5",
+                        };
+
+                        SpreadsheetControl.SetData(data);
+
+                        for (int c = 0; c < 3; c++)
+                        {
+                            SpreadsheetControl.CellTypefaces[(c, 0)] = new Typeface(FontFamily.Default, FontStyle.Normal, FontWeight.Bold);
+                            SpreadsheetControl.CellTextAlignment[(c, 0)] = TextAlignment.Center;
+                            SpreadsheetControl.CellVerticalAlignment[(c, 0)] = VerticalAlignment.Center;
+                        }
+
+                        for (int r = 1; r <= 6; r++)
+                        {
+                            SpreadsheetControl.CellTextAlignment[(0, r)] = TextAlignment.Left;
+
+                            // Column 1: plain NumericCell; column 2: NumericLinkCell with the same
+                            // formatting, both narrow enough to force the ellipsis on big values.
+                            SpreadsheetControl.NumericCells[(1, r)] = new NumericCell(2) { NegativeRed = true };
+                            SpreadsheetControl.NumericCells[(2, r)] = new NumericCell(2) { NegativeRed = true };
+                            SpreadsheetControl.LinkCells[(2, r)] = new NumericLinkCell("link" + r, false, false, 2);
+                        }
+
+                        SpreadsheetControl.SetWidth(new Dictionary<int, double>
+                        {
+                            [0] = 60, [1] = 64, [2] = 64,
+                        });
+
+                        SpreadsheetControl.Refresh();
+
+                        await System.Threading.Tasks.Task.Delay(500);
+                        SaveScreenshot(@"C:\Users\89664\Desktop\numeric_ellipsis.png");
+                        Console.WriteLine("[Test] Numeric ellipsis screenshot saved.");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine("[Test] EXCEPTION: " + ex);
+                    }
+                    finally
+                    {
+                        Environment.Exit(0);
+                    }
+                };
+            }
+
             // Automated screenshot test for the frozen rows / columns demo: shoots the sheet at the
             // top-left corner, after scrolling to the bottom-right corner (the frozen header row and
             // the 月 / 日 columns have to stay in place), and with a single axis frozen.
