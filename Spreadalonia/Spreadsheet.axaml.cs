@@ -466,6 +466,19 @@ namespace Spreadalonia
         }
 
         /// <summary>
+        /// The placeholder drawn by a <see cref="NumericLinkCell"/> whose value is zero, empty or
+        /// not a number, so that such a cell keeps a clickable target. Defaults to "…"; set it to
+        /// <see langword="null"/> or "" to switch the placeholder off (a single cell can still opt
+        /// in through <see cref="LinkCell.EmptyText"/>). The placeholder is display only: exports,
+        /// the clipboard and printed output still see the empty value.
+        /// </summary>
+        public string EmptyNumericLinkText
+        {
+            get { return IsInitialized ? ContentTable.EmptyNumericLinkText : null; }
+            set { if (IsInitialized) { ContentTable.EmptyNumericLinkText = value; } }
+        }
+
+        /// <summary>
         /// Enables or disables the smooth expand / collapse animation of tree rows. When enabled
         /// (the default), the child rows of an expanded or collapsed tree node grow from zero
         /// height to their actual height (or shrink to zero and fade out); collapsing rows are

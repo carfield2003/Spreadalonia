@@ -69,9 +69,45 @@ namespace Spreadalonia
         /// </summary>
         public bool IsVisited { get; set; }
 
+        /// <summary>
+        /// How large the area that reacts to hovering and clicking is. The default
+        /// (<see cref="LinkHitMode.TextOnly"/>) keeps the historical behaviour of reacting to the
+        /// rendered text only — which for an empty-value placeholder ("…") is just a few pixels
+        /// wide and therefore almost impossible to hit. <see cref="LinkHitMode.EntireCell"/> makes
+        /// the whole cell (or merged range) reactive, and
+        /// <see cref="LinkHitMode.EntireCellWhenEmpty"/> does so only while the cell shows its
+        /// empty-value placeholder. Both the hand cursor and the click use this rectangle, so the
+        /// two can never disagree.
+        /// </summary>
+        public LinkHitMode HitMode { get; set; } = LinkHitMode.TextOnly;
+
+        /// <summary>
+        /// The placeholder drawn when the cell has nothing to show — e.g. a
+        /// <see cref="NumericLinkCell"/> whose value is zero, empty or not a number — so that the
+        /// cell keeps a clickable target. When this is <see langword="null"/> or empty the cell
+        /// falls back to <see cref="Table.EmptyNumericLinkText"/> and finally to
+        /// <see cref="NumericLinkCell.DefaultEmptyText"/> (both "…" by default). When every level
+        /// is empty the cell shows nothing and cannot be clicked.
+        /// </summary>
+        public string EmptyText { get; set; }
+
+        /// <summary>
+        /// The brush used to draw the empty-value placeholder (see <see cref="EmptyText"/>). When
+        /// this is <see langword="null"/> (the default) the normal link colour is used, so that
+        /// the placeholder stays recognisable as a link.
+        /// </summary>
+        public IBrush EmptyBrush { get; set; }
+
         internal bool IsPressed { get; set; }
 
         internal Rect HitRect { get; set; }
+
+        /// <summary>
+        /// The table the cell was last rendered by. Used to resolve table level defaults such as
+        /// <see cref="Table.EmptyNumericLinkText"/>. Assigned by <see cref="Table"/> right before
+        /// the cell is rendered; it is <see langword="null"/> for a cell that has never been drawn.
+        /// </summary>
+        internal Table OwnerTable { get; set; }
 
         /// <summary>
         /// Whether the display text is truncated with a trailing ellipsis ("…") when it does not
@@ -113,11 +149,43 @@ namespace Spreadalonia
         }
 
         /// <summary>
-        /// Computes the text to draw. The base implementation returns <see cref="DisplayText"/>;
-        /// derived classes (e.g. <see cref="NumericLinkCell"/>) may format a raw cell value instead.
+        /// Computes the text to draw. The base implementation returns <see cref="DisplayText"/>
+        /// (or <see cref="EmptyText"/> when there is nothing to show); derived classes (e.g.
+        /// <see cref="NumericLinkCell"/>) may format a raw cell value instead.
         /// </summary>
         /// <param name="rawData">The raw string stored in the cell, or <see langword="null"/>.</param>
-        internal virtual string GetDisplayText(string rawData)
+        /// <param name="isEmptyPlaceholder">
+        /// When this method returns, <see langword="true"/> if the returned text is the
+        /// empty-value placeholder rather than a real value.
+        /// </param>
+        internal virtual string GetDisplayText(string rawData, out bool isEmptyPlaceholder)
+        {
+            if (string.IsNullOrEmpty(DisplayText) && !string.IsNullOrEmpty(EmptyText))
+            {
+                isEmptyPlaceholder = true;
+                return EmptyText;
+            }
+
+            isEmptyPlaceholder = false;
+            return DisplayText;
+        }
+
+        /// <summary>
+        /// Computes the text to draw (see <see cref="GetDisplayText(string, out bool)"/>).
+        /// </summary>
+        /// <param name="rawData">The raw string stored in the cell, or <see langword="null"/>.</param>
+        internal string GetDisplayText(string rawData)
+        {
+            return GetDisplayText(rawData, out _);
+        }
+
+        /// <summary>
+        /// Computes the text that leaves the control: xlsx export, the clipboard and printed
+        /// output must see the underlying value, never the display-only empty-value placeholder.
+        /// The base implementation returns <see cref="DisplayText"/>.
+        /// </summary>
+        /// <param name="rawData">The raw string stored in the cell, or <see langword="null"/>.</param>
+        internal virtual string GetExportText(string rawData)
         {
             return DisplayText;
         }
@@ -142,7 +210,7 @@ namespace Spreadalonia
                 context.FillRectangle(background, bounds);
             }
 
-            string text = GetDisplayText(rawData);
+            string text = GetDisplayText(rawData, out bool isEmptyPlaceholder);
 
             if (string.IsNullOrEmpty(text))
             {
@@ -151,6 +219,14 @@ namespace Spreadalonia
             }
 
             IBrush brush = IsPressed ? (ActivateColor ?? LinkColor) : (IsVisited ? (VisitedColor ?? LinkColor) : LinkColor);
+
+            // The placeholder is drawn like the link itself (same colour unless the host overrides
+            // EmptyBrush) so that the user can see that the cell is an entry point.
+            if (isEmptyPlaceholder && EmptyBrush != null)
+            {
+                brush = EmptyBrush;
+            }
+
             brush ??= Brushes.Black;
 
             Thickness pad = margin ?? new Thickness(3);
@@ -235,7 +311,7 @@ namespace Spreadalonia
                 textX = bounds.X + bounds.Width - pad.Right - textWidth;
             }
 
-            HitRect = new Rect(textX, textY, textWidth, textHeight);
+            HitRect = GetHitRect(bounds, new Rect(textX, textY, textWidth, textHeight), isEmptyPlaceholder);
 
             using (context.PushClip(new Rect(
                 bounds.X + pad.Left,
@@ -252,6 +328,37 @@ namespace Spreadalonia
                 }
             }
         }
+
+        /// <summary>
+        /// Computes the rectangle that reacts to hovering and clicking (see <see cref="HitMode"/>).
+        /// </summary>
+        /// <param name="bounds">The bounds of the cell (or of the merged range).</param>
+        /// <param name="textRect">The rectangle actually covered by the rendered text.</param>
+        /// <param name="isEmptyPlaceholder">Whether the rendered text is the empty-value placeholder.</param>
+        private Rect GetHitRect(Rect bounds, Rect textRect, bool isEmptyPlaceholder)
+        {
+            bool entireCell = HitMode == LinkHitMode.EntireCell ||
+                (HitMode == LinkHitMode.EntireCellWhenEmpty && isEmptyPlaceholder);
+
+            if (!entireCell)
+            {
+                return textRect;
+            }
+
+            // The bottom-right corner of a selected cell is the fill handle: it stays outside the
+            // hit rectangle so that the host can still drag-fill from a link cell.
+            return new Rect(
+                bounds.X,
+                bounds.Y,
+                Math.Max(0, bounds.Width - FillHandleMargin),
+                Math.Max(0, bounds.Height - FillHandleMargin));
+        }
+
+        /// <summary>
+        /// The size of the corner kept free for the fill handle when the hit area covers the whole
+        /// cell. The fill handle itself is detected within 3 pixels of the corner.
+        /// </summary>
+        private const double FillHandleMargin = 4;
 
         /// <summary>
         /// Creates a <see cref="FormattedText"/> for the given text, guarding against an
@@ -279,8 +386,9 @@ namespace Spreadalonia
     /// <summary>
     /// A <see cref="LinkCell"/> that formats a numeric value with thousand separators and a
     /// fixed number of decimal digits. Values of zero (and non-numeric values) are displayed
-    /// as empty text; when <see cref="ResponseEmpty"/> is set the empty display becomes "…"
-    /// and the cell remains clickable.
+    /// as empty text; when <see cref="ResponseEmpty"/> is set (the default) the empty display
+    /// becomes the placeholder "…" and the cell remains clickable, so that a zero amount is
+    /// still a usable entry point.
     /// </summary>
     public class NumericLinkCell : LinkCell
     {
@@ -290,14 +398,23 @@ namespace Spreadalonia
         public int Digits { get; set; }
 
         /// <summary>
-        /// Whether an empty (zero / invalid) value is displayed as "…" and stays clickable.
+        /// Whether an empty (zero / invalid) value is displayed as a placeholder and stays
+        /// clickable. Defaults to <see langword="true"/>.
         /// </summary>
-        public bool ResponseEmpty { get; set; }
+        public bool ResponseEmpty { get; set; } = true;
+
+        /// <summary>
+        /// The placeholder used by every <see cref="NumericLinkCell"/> that does not set
+        /// <see cref="LinkCell.EmptyText"/> itself and that is not attached to a table (or whose
+        /// <see cref="Table.EmptyNumericLinkText"/> is not set). Defaults to "…"; set it to
+        /// <see langword="null"/> or "" to switch the placeholder off globally.
+        /// </summary>
+        public static string DefaultEmptyText { get; set; } = "…";
 
         /// <summary>
         /// Creates a new <see cref="NumericLinkCell"/> with two decimal digits.
         /// </summary>
-        public NumericLinkCell() : this("{}", false, false, 2)
+        public NumericLinkCell() : this("{}", true, false, 2)
         {
         }
 
@@ -305,7 +422,7 @@ namespace Spreadalonia
         /// Creates a new <see cref="NumericLinkCell"/> with the specified link parameter.
         /// </summary>
         /// <param name="linkPara">The navigation parameter carried by the click event.</param>
-        public NumericLinkCell(string linkPara) : this(linkPara, false, false, 2)
+        public NumericLinkCell(string linkPara) : this(linkPara, true, false, 2)
         {
         }
 
@@ -332,23 +449,103 @@ namespace Spreadalonia
             ResponseEmpty = responseEmpty;
             Strikethrough = strikethrough;
             Digits = digits;
+
+            // A numeric link cell is (right) aligned inside a usually wide amount column, so the
+            // placeholder "…" would otherwise be a 3–5 pixel wide target. The whole cell reacts
+            // while the placeholder is shown; the normal value keeps the historical text-only
+            // behaviour. Set HitMode to LinkHitMode.EntireCell to react to the whole cell always.
+            HitMode = LinkHitMode.EntireCellWhenEmpty;
+        }
+
+        /// <summary>
+        /// Creates a new <see cref="NumericLinkCell"/> with full configuration.
+        /// </summary>
+        /// <param name="linkPara">The navigation parameter carried by the click event.</param>
+        /// <param name="responseEmpty">Whether an empty value is displayed as a placeholder and stays clickable.</param>
+        /// <param name="strikethrough">Whether a strikethrough line is drawn through the text.</param>
+        /// <param name="digits">The number of decimal digits shown.</param>
+        /// <param name="hitMode">How large the area that reacts to hovering and clicking is.</param>
+        public NumericLinkCell(string linkPara, bool responseEmpty, bool strikethrough, int digits, LinkHitMode hitMode)
+            : this(linkPara, responseEmpty, strikethrough, digits)
+        {
+            HitMode = hitMode;
         }
 
         /// <inheritdoc/>
         protected override bool UseEllipsisWhenClipped => true;
 
         /// <inheritdoc/>
-        internal override string GetDisplayText(string rawData)
+        internal override string GetDisplayText(string rawData, out bool isEmptyPlaceholder)
         {
+            isEmptyPlaceholder = false;
+
             // Shares the implementation with NumericCell so that the two can never drift apart.
             string text = NumberFormatter.Format(rawData, Digits, true);
 
             if (ResponseEmpty && text.Length == 0)
             {
-                return "…";
+                string placeholder = ResolveEmptyText();
+
+                if (!string.IsNullOrEmpty(placeholder))
+                {
+                    isEmptyPlaceholder = true;
+                    return placeholder;
+                }
             }
 
             return text;
         }
+
+        /// <inheritdoc/>
+        internal override string GetExportText(string rawData)
+        {
+            // The placeholder is display only: an export must see the (empty) value instead.
+            return NumberFormatter.Format(rawData, Digits, true);
+        }
+
+        /// <summary>
+        /// Resolves the placeholder to draw: the cell's own <see cref="LinkCell.EmptyText"/> wins,
+        /// then the table level <see cref="Table.EmptyNumericLinkText"/>, then
+        /// <see cref="DefaultEmptyText"/>.
+        /// </summary>
+        private string ResolveEmptyText()
+        {
+            if (!string.IsNullOrEmpty(EmptyText))
+            {
+                return EmptyText;
+            }
+
+            if (OwnerTable != null)
+            {
+                return OwnerTable.EmptyNumericLinkText;
+            }
+
+            return DefaultEmptyText;
+        }
+    }
+
+    /// <summary>
+    /// Determines how large the area of a <see cref="LinkCell"/> that reacts to hovering and
+    /// clicking is.
+    /// </summary>
+    public enum LinkHitMode
+    {
+        /// <summary>
+        /// Only the rectangle covered by the rendered text reacts. This is the historical
+        /// behaviour and the default, kept so that existing sheets do not change.
+        /// </summary>
+        TextOnly,
+
+        /// <summary>
+        /// The whole cell (or merged range) reacts, including the empty space next to the text.
+        /// </summary>
+        EntireCell,
+
+        /// <summary>
+        /// The whole cell reacts while the cell shows its empty-value placeholder; the text
+        /// rectangle reacts otherwise. This is what an amount column needs: the placeholder "…"
+        /// is only a few pixels wide, but the cell has to stay clickable everywhere.
+        /// </summary>
+        EntireCellWhenEmpty
     }
 }

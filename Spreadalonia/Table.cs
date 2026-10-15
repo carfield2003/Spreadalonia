@@ -230,6 +230,23 @@ namespace Spreadalonia
         /// </summary>
         public bool AutoManageRows { get; set; } = true;
 
+        private string _emptyNumericLinkText = "…";
+
+        /// <summary>
+        /// The placeholder drawn by a <see cref="NumericLinkCell"/> whose value is zero, empty or
+        /// not a number, so that such a cell keeps a clickable target. Defaults to "…"; set it to
+        /// <see langword="null"/> or "" to switch the placeholder off for the whole table (a
+        /// single cell can still opt in through <see cref="LinkCell.EmptyText"/>, and a cell can
+        /// opt out through <see cref="NumericLinkCell.ResponseEmpty"/>).
+        /// The placeholder is display only: exports, the clipboard and printed output still see
+        /// the empty value.
+        /// </summary>
+        public string EmptyNumericLinkText
+        {
+            get { return _emptyNumericLinkText; }
+            set { _emptyNumericLinkText = value; this.InvalidateVisual(); }
+        }
+
         private List<CellBackground> _cellBackgrounds = new List<CellBackground>();
 
         /// <summary>
@@ -2432,9 +2449,10 @@ namespace Spreadalonia
         private static readonly Cursor HandCursor = new Cursor(StandardCursorType.Hand);
 
         /// <summary>
-        /// Returns the <see cref="LinkCell"/> whose rendered link text rectangle contains the
-        /// given pointer position. The hit rectangles are updated every time the table is drawn,
-        /// so only visible link cells can be hit.
+        /// Returns the <see cref="LinkCell"/> whose hit rectangle contains the given pointer
+        /// position. The hit rectangles are updated every time the table is drawn, so only visible
+        /// link cells can be hit. Depending on <see cref="LinkCell.HitMode"/> the rectangle covers
+        /// the rendered text only or the whole cell.
         /// </summary>
         private bool TryHitLinkCell(double xPos, double yPos, out LinkCell linkCell, out (int, int) key)
         {
@@ -2851,6 +2869,16 @@ namespace Spreadalonia
                         return;
                     }
 
+                    // Double clicking a link cell must not open the editing box either: the cell is
+                    // a navigation entry point, and the value can still be typed over (or edited
+                    // with F2) when that is what the user wants. The click itself has already been
+                    // raised by the first click of the double click.
+                    if (TryHitLinkCell(xPos, yPos, out _, out _))
+                    {
+                        pointerPressedAction = 0;
+                        return;
+                    }
+
                     Color? clickedColor = null;
 
                     if (this.Container.ShowColorPreview && this.Data.TryGetValue(cell, out string txt) && txt.StartsWith("#") && (txt.Length == 7 || txt.Length == 9))
@@ -2954,6 +2982,21 @@ namespace Spreadalonia
             if (ButtonCells != null && ButtonCells.Count > 0)
             {
                 foreach (KeyValuePair<(int, int), ButtonCell> kvp in ButtonCells)
+                {
+                    if (kvp.Value != null)
+                    {
+                        kvp.Value.HitRect = default;
+                    }
+                }
+            }
+
+            // The same for the link cells. This matters more than for buttons because the hit
+            // rectangle of a link cell can now cover the whole cell (LinkCell.HitMode), so a stale
+            // rectangle of a cell that has been scrolled out of view would swallow the clicks of
+            // whatever is drawn at that place now.
+            if (LinkCells != null && LinkCells.Count > 0)
+            {
+                foreach (KeyValuePair<(int, int), LinkCell> kvp in LinkCells)
                 {
                     if (kvp.Value != null)
                     {
@@ -3225,8 +3268,12 @@ namespace Spreadalonia
                                 bool hasTreeCell = TreeCells.TryGetValue((left + x, top + y), out TreeGradeCell treeCell) && treeCell != null;
                                 bool hasNumericCell = NumericCells.TryGetValue((left + x, top + y), out NumericCell numericCellPlaceholder) && numericCellPlaceholder != null;
                                 bool hasButtonCell = ButtonCells.TryGetValue((left + x, top + y), out ButtonCell buttonCell) && buttonCell != null;
+                                bool hasLinkCell = LinkCells.TryGetValue((left + x, top + y), out LinkCell linkCell) && linkCell != null;
 
-                                if (!hasData && !hasTreeCell && !hasNumericCell && !hasButtonCell)
+                                // A link cell carries its own content (and its own empty-value
+                                // placeholder), so it is drawn even when the sheet has no data for
+                                // it: an empty amount still has to be clickable.
+                                if (!hasData && !hasTreeCell && !hasNumericCell && !hasButtonCell && !hasLinkCell)
                                 {
                                     continue;
                                 }
@@ -3296,6 +3343,53 @@ namespace Spreadalonia
                                     buttonCell.Render(context, new Rect(buttonX, buttonY, xs[x] - buttonX, ys[y] - buttonY), buttonForeground, buttonFace, buttonFontSize, buttonHor, buttonVer, txt);
                                 }
 
+                                // Link cells render a clickable hyperlink instead of the default
+                                // text. They bring their own content (values of zero are drawn as
+                                // the "…" placeholder), so they do not need any data of their own.
+                                if (hasLinkCell && (mergedCells == null || !mergedCells.Contains((left + x, top + y))) &&
+                                    (!Container.IsEditing || left + x != Container.EditingCell.Item1 || top + y != Container.EditingCell.Item2))
+                                {
+                                    double linkX = x == 0 ? 0 : xs[x - 1];
+                                    double linkY = y == 0 ? 0 : ys[y - 1];
+
+                                    if (!CellTypefaces.TryGetValue((left + x, top + y), out Typeface linkFace) &&
+                                        !RowTypefaces.TryGetValue(top + y, out linkFace) &&
+                                        !ColumnTypefaces.TryGetValue(left + x, out linkFace))
+                                    {
+                                        linkFace = defaultTypeFace;
+                                    }
+
+                                    double linkFontSize = this.FontSize;
+                                    if (CellFontSize.TryGetValue((left + x, top + y), out double customLinkFontSize))
+                                    {
+                                        linkFontSize = customLinkFontSize;
+                                    }
+
+                                    TextAlignment linkHor = this.DefaultTextAlignment;
+                                    if (CellTextAlignment.TryGetValue((left + x, top + y), out TextAlignment customLinkHor))
+                                    {
+                                        linkHor = customLinkHor;
+                                    }
+
+                                    VerticalAlignment linkVer = this.DefaultVerticalAlignment;
+                                    if (CellVerticalAlignment.TryGetValue((left + x, top + y), out VerticalAlignment customLinkVer))
+                                    {
+                                        linkVer = customLinkVer;
+                                    }
+
+                                    Thickness linkMargin = this.DefaultMargin;
+                                    if (CellMargin.TryGetValue((left + x, top + y), out Thickness customLinkMargin))
+                                    {
+                                        linkMargin = customLinkMargin;
+                                    }
+
+                                    // Lets the cell resolve table level defaults (EmptyNumericLinkText).
+                                    linkCell.OwnerTable = this;
+
+                                    linkCell.Render(context, new Rect(linkX, linkY, xs[x] - linkX, ys[y] - linkY), null, linkMargin, txt, linkFace, linkFontSize, linkHor, linkVer);
+                                    continue;
+                                }
+
                                 if (hasData)
                                 {
                                     if (mergedCells != null && mergedCells.Contains((left + x, top + y)))
@@ -3325,47 +3419,6 @@ namespace Spreadalonia
                                             double titleX = x == 0 ? 0 : xs[x - 1];
                                             double titleY = y == 0 ? 0 : ys[y - 1];
                                             titleCell.Render(context, new Rect(titleX, titleY, xs[x] - titleX, ys[y] - titleY), null, null);
-                                            continue;
-                                        }
-
-                                        // Link cells render a clickable hyperlink instead of the default text.
-                                        if (LinkCells.TryGetValue((left + x, top + y), out LinkCell linkCell))
-                                        {
-                                            double linkX = x == 0 ? 0 : xs[x - 1];
-                                            double linkY = y == 0 ? 0 : ys[y - 1];
-
-                                            if (!CellTypefaces.TryGetValue((left + x, top + y), out Typeface linkFace) &&
-                                                !RowTypefaces.TryGetValue(top + y, out linkFace) &&
-                                                !ColumnTypefaces.TryGetValue(left + x, out linkFace))
-                                            {
-                                                linkFace = defaultTypeFace;
-                                            }
-
-                                            double linkFontSize = this.FontSize;
-                                            if (CellFontSize.TryGetValue((left + x, top + y), out double customLinkFontSize))
-                                            {
-                                                linkFontSize = customLinkFontSize;
-                                            }
-
-                                            TextAlignment linkHor = this.DefaultTextAlignment;
-                                            if (CellTextAlignment.TryGetValue((left + x, top + y), out TextAlignment customLinkHor))
-                                            {
-                                                linkHor = customLinkHor;
-                                            }
-
-                                            VerticalAlignment linkVer = this.DefaultVerticalAlignment;
-                                            if (CellVerticalAlignment.TryGetValue((left + x, top + y), out VerticalAlignment customLinkVer))
-                                            {
-                                                linkVer = customLinkVer;
-                                            }
-
-                                            Thickness linkMargin = this.DefaultMargin;
-                                            if (CellMargin.TryGetValue((left + x, top + y), out Thickness customLinkMargin))
-                                            {
-                                                linkMargin = customLinkMargin;
-                                            }
-
-                                            linkCell.Render(context, new Rect(linkX, linkY, xs[x] - linkX, ys[y] - linkY), null, linkMargin, txt, linkFace, linkFontSize, linkHor, linkVer);
                                             continue;
                                         }
 
@@ -3658,6 +3711,9 @@ namespace Spreadalonia
                                     {
                                         mergedLinkMargin = mergedCustomLinkMargin;
                                     }
+
+                                    // Lets the cell resolve table level defaults (EmptyNumericLinkText).
+                                    mergedLinkCell.OwnerTable = this;
 
                                     mergedLinkCell.Render(context, new Rect(mergeX0, mergeY0, mergeX1 - mergeX0, mergeY1 - mergeY0), null, mergedLinkMargin, mergedText, mergedLinkFace, mergedLinkFontSize, mergedLinkHor, mergedLinkVer);
                                     continue;

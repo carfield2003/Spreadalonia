@@ -245,6 +245,107 @@ namespace Demo
                 };
             }
 
+            // Automated test for the empty-value placeholder of a NumericLinkCell: a zero, missing
+            // or invalid amount is drawn as "…" and stays clickable over the whole cell, while the
+            // exported value stays empty.
+            if (Environment.GetCommandLineArgs().Any(a => a == "--numeric-link-empty-test"))
+            {
+                Opened += async (_, _) =>
+                {
+                    try
+                    {
+                        await System.Threading.Tasks.Task.Delay(500);
+
+                        SpreadsheetControl.MergedRanges = null;
+                        SpreadsheetControl.CellBackgrounds = null;
+                        SpreadsheetControl.CellBorders = null;
+                        SpreadsheetControl.MaxTableWidth = 3;
+                        SpreadsheetControl.MaxTableHeight = 8;
+                        SpreadsheetControl.TitleCells?.Clear();
+                        SpreadsheetControl.LinkCells?.Clear();
+                        SpreadsheetControl.TreeCells?.Clear();
+                        SpreadsheetControl.NumericCells?.Clear();
+                        SpreadsheetControl.ButtonCells?.Clear();
+                        SpreadsheetControl.CellFontSize?.Clear();
+                        SpreadsheetControl.CellTypefaces?.Clear();
+                        SpreadsheetControl.CellForeground?.Clear();
+                        SpreadsheetControl.CellTextAlignment?.Clear();
+                        SpreadsheetControl.CellVerticalAlignment?.Clear();
+                        SpreadsheetControl.CellMargin?.Clear();
+                        SpreadsheetControl.ClearContent();
+                        SpreadsheetControl.UnfreezePanes();
+                        SpreadsheetControl.ShowAllRows();
+                        SpreadsheetControl.ShowAllColumns();
+
+                        var data = new Dictionary<(int, int), string>
+                        {
+                            [(0, 0)] = "科目", [(1, 0)] = "期初余额", [(2, 0)] = "调整金额",
+                            [(0, 1)] = "1001 库存现金", [(1, 1)] = "0", [(2, 1)] = "0",
+                            [(0, 2)] = "1122 应收账款", [(1, 2)] = "104.50", [(2, 2)] = "104.50",
+                            [(0, 3)] = "2202 应付账款", [(1, 3)] = "-3200.75", [(2, 3)] = "abc",
+                            [(0, 4)] = "1403 原材料", [(1, 4)] = "123456789012.55", [(2, 4)] = "0.004",
+                            // Row 5 carries no data at all: the placeholder still has to be drawn.
+                            [(0, 5)] = "5001 主营业务收入",
+                        };
+
+                        SpreadsheetControl.SetData(data);
+
+                        for (int c = 0; c < 3; c++)
+                        {
+                            SpreadsheetControl.CellTypefaces[(c, 0)] = new Typeface(FontFamily.Default, FontStyle.Normal, FontWeight.Bold);
+                            SpreadsheetControl.CellTextAlignment[(c, 0)] = TextAlignment.Center;
+                        }
+
+                        for (int r = 1; r <= 5; r++)
+                        {
+                            SpreadsheetControl.CellTextAlignment[(1, r)] = TextAlignment.Right;
+                            SpreadsheetControl.CellTextAlignment[(2, r)] = TextAlignment.Right;
+
+                            // No argument other than the link parameter: the placeholder and the
+                            // cell-wide hit area of an empty value have to be on by default.
+                            SpreadsheetControl.LinkCells[(1, r)] = new NumericLinkCell("debit/" + r);
+                            SpreadsheetControl.LinkCells[(2, r)] = new NumericLinkCell("credit/" + r);
+                        }
+
+                        SpreadsheetControl.SetWidth(new Dictionary<int, double>
+                        {
+                            [0] = 150, [1] = 110, [2] = 110,
+                        });
+
+                        SpreadsheetControl.Refresh();
+
+                        await System.Threading.Tasks.Task.Delay(500);
+                        SaveScreenshot(@"C:\Users\89664\Desktop\numeric_link_empty.png");
+                        Console.WriteLine("[Test] NumericLinkCell empty placeholder screenshot saved.");
+
+                        ReportNumericLinkEmpty();
+
+                        // R7: the placeholder is display only; the exported workbook must contain
+                        // the underlying empty value, not the "…" character.
+                        string xlsxPath = @"C:\Users\89664\Desktop\numeric_link_empty.xlsx";
+                        SpreadsheetControl.SaveXlsx(xlsxPath);
+                        using (var workbook = new ClosedXML.Excel.XLWorkbook(xlsxPath))
+                        {
+                            var sheet = workbook.Worksheet(1);
+                            string b2 = sheet.Cell(2, 2).GetValue<string>();
+                            string c2 = sheet.Cell(2, 3).GetValue<string>();
+                            string b3 = sheet.Cell(3, 2).GetValue<string>();
+                            Console.WriteLine("[Test] xlsx B2 (placeholder) = '" + b2 + "' (should be empty)");
+                            Console.WriteLine("[Test] xlsx C2 (placeholder) = '" + c2 + "' (should be empty)");
+                            Console.WriteLine("[Test] xlsx B3 (value) = '" + b3 + "' (should be 104.50)");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine("[Test] EXCEPTION: " + ex);
+                    }
+                    finally
+                    {
+                        Environment.Exit(0);
+                    }
+                };
+            }
+
             // Automated screenshot test for the frozen rows / columns demo: shoots the sheet at the
             // top-left corner, after scrolling to the bottom-right corner (the frozen header row and
             // the 月 / 日 columns have to stay in place), and with a single axis frozen.
@@ -1691,6 +1792,78 @@ namespace Demo
             }
 
             Console.WriteLine("[Test] last row " + lastRow + " hit from every grab position and resizable within 5px: " + allRowsOk);
+        }
+
+        /// <summary>
+        /// Reports the placeholder text and the hit rectangle of every NumericLinkCell of the
+        /// empty-value demo: an empty value has to show the placeholder and react over the whole
+        /// cell, while the exported value has to stay empty.
+        /// </summary>
+        private void ReportNumericLinkEmpty()
+        {
+            HorizontalHeader columnHeader = SpreadsheetControl.HorizontalHeaderControlInternal;
+            VerticalHeader rowHeader = SpreadsheetControl.VerticalHeaderControlInternal;
+
+            double[] xs = columnHeader.LastDrawnXs;
+            double[] ys = rowHeader.LastDrawnYs;
+
+            Console.WriteLine("[Test] ===== NumericLinkCell empty placeholder =====");
+            Console.WriteLine("[Test] EmptyNumericLinkText='" + SpreadsheetControl.EmptyNumericLinkText + "'");
+
+            if (xs == null || ys == null)
+            {
+                Console.WriteLine("[Test] the headers have not been rendered yet");
+                return;
+            }
+
+            bool allPlaceholdersClickable = true;
+
+            for (int r = 1; r <= 5; r++)
+            {
+                for (int c = 1; c <= 2; c++)
+                {
+                    if (!SpreadsheetControl.LinkCells.TryGetValue((c, r), out LinkCell link) || link == null)
+                    {
+                        continue;
+                    }
+
+                    SpreadsheetControl.Data.TryGetValue((c, r), out string raw);
+
+                    int ci = c - columnHeader.LastDrawnLeft;
+                    int ri = r - rowHeader.LastDrawnTop;
+
+                    double cellLeft = ci == 0 ? 0 : xs[ci - 1];
+                    double cellTop = ri == 0 ? 0 : ys[ri - 1];
+                    double cellRight = xs[ci];
+                    double cellBottom = ys[ri];
+
+                    // Probe the left edge, the middle and the wide empty space on the right.
+                    double middleY = (cellTop + cellBottom) * 0.5;
+                    double[] probeX = new double[] { cellLeft + 2, (cellLeft + cellRight) * 0.5, cellRight - 8 };
+
+                    bool allHit = true;
+                    foreach (double px in probeX)
+                    {
+                        allHit &= link.HitRect.Contains(new Point(px, middleY));
+                    }
+
+                    string display = link.GetDisplayText(raw);
+                    string exported = link.GetExportText(raw);
+
+                    if (display == "…")
+                    {
+                        allPlaceholdersClickable &= allHit;
+                    }
+
+                    Console.WriteLine("[Test] cell (" + c + ", " + r + ") raw='" + (raw ?? "<none>") + "'"
+                        + " display='" + display + "' export='" + exported + "'"
+                        + " cell " + (cellRight - cellLeft).ToString("0.#") + "x" + (cellBottom - cellTop).ToString("0.#")
+                        + " hit " + link.HitRect.Width.ToString("0.#") + "x" + link.HitRect.Height.ToString("0.#")
+                        + " allProbesHit=" + allHit);
+                }
+            }
+
+            Console.WriteLine("[Test] every placeholder cell is clickable over its whole width: " + allPlaceholdersClickable);
         }
 
         /// <summary>

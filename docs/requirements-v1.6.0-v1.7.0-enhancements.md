@@ -19,6 +19,7 @@
 | 1.7.3 | 合并单元格跨冻结边界重复渲染修复 | P0 | 已完成并验证 |
 | 1.7.4 | 跨冻结边界合并单元格整体居中 + 冻结态表头拖拽改尺寸修复 | P0 | 已完成并验证 |
 | 1.7.5 | 固定尺寸表格（MaxTableWidth/MaxTableHeight）最后一列/行无法调整尺寸修复 | P0 | 已完成并验证 |
+| 1.7.6 | 数值链接单元格空值占位与点击热区（NumericLinkCell） | P1 | 已完成并验证 |
 
 ---
 
@@ -245,8 +246,64 @@ v1.7.3 消除了重复绘制，但标题文本不再跨冻结分隔线居中（�
 
 ---
 
+## 十、数值链接单元格空值占位与点击热区（v1.7.6）
+
+期初余额等表格里，辅助核算行对应的金额单元格既是数值，又是入口——点击跳到辅助核算明细页。
+当金额为 0（或空、非法）时，若不显示任何可点目标，功能就会失效。
+
+### 行为
+
+- `NumericLinkCell` 对 0 / 空 / 非法值默认显示占位符 `…`（`ResponseEmpty` 默认 `true`），
+  颜色沿用链接色，对齐跟随单元格（期初/调整列为右对齐，占位符靠右）。
+- 占位符可在三层配置：
+  - 单元格自身：`LinkCell.EmptyText`
+  - 表级：`Table.EmptyNumericLinkText` / `Spreadsheet.EmptyNumericLinkText`
+  - 进程级（无表时）：`NumericLinkCell.DefaultEmptyText`
+  - 任何一层置为 `null` / "" 即可关闭占位。
+- 新增 `LinkHitMode`：
+  - `TextOnly`：历史行为，只文字区可点；
+  - `EntireCellWhenEmpty`：`NumericLinkCell` 默认，占位时整格可点；
+  - `EntireCell`：整格一直可点。
+- 热区同时用于 `OnPointerMoved`（手型光标）和 `OnPointerReleased`（`LinkClick`），两者永远一致。
+- 链接单元格禁止双击进入编辑（仍可通过输入字符 / F2 编辑）。
+- 占位符只是显示层：`xlsx` 导出、剪贴板复制、打印数据源仍为空值。
+
+### API
+
+- `LinkCell`
+  - `LinkHitMode HitMode { get; set; }`
+  - `string EmptyText { get; set; }`
+  - `IBrush EmptyBrush { get; set; }`
+- `NumericLinkCell`
+  - `bool ResponseEmpty { get; set; } = true`
+  - `static string DefaultEmptyText { get; set; } = "…"`
+- `Table` / `Spreadsheet`
+  - `string EmptyNumericLinkText { get; set; } = "…"`（`null` / "" 关闭占位）
+
+### 修复
+
+- `LinkCell.Render`：空值时返回占位符；按 `HitMode` 把 `HitRect` 设为文字矩形或单元格矩形；
+  绘制占位符时使用 `EmptyBrush ?? LinkColor`。
+- `NumericLinkCell.GetDisplayText`：空值返回解析后的占位符；`GetExportText` 永远返回基础格式化值。
+- `XlsxExporter.WriteLinkCell`：改为调用 `GetExportText`，避免把 `…` 写进工作表。
+- `Table.Render`：
+  - 每帧渲染前清空所有 `LinkCell.HitRect`，防止整格热区在滚出后仍被命中；
+  - `LinkCell` 不再依赖 `Data` 存在才渲染，因此无数据的空链接单元格也能显示占位；
+  - 渲染前把 `OwnerTable` 赋给 `LinkCell`，用于解析表级默认占位；
+  - `OnPointerPressed` 双击分支跳过链接单元格，避免进入编辑态。
+
+### 验收
+
+- Demo 新增 `--numeric-link-empty-test`：构建含 0 / 104.50 / 非法 / 无数据的期初余额表，
+  验证显示 `…`、占位单元格整格命中（左侧、中间、右侧空白均 `allProbesHit=True`）、
+  非占位单元格保持文字热区、导出 xlsx 中占位单元格为空。
+- `--link-cell-test`、`--numeric-ellipsis-test` 回归通过。
+- `dotnet build Spreadalonia.sln` 0 错误，`read_lints` 干净。
+
+---
+
 ## 回归清单（每批次执行）
 
 - `dotnet build Spreadalonia.sln` 过滤 `error CS` 无输出，`read_lints` 干净。
-- Demo 截图冒烟：`--tree-cell-test`、`--hidden-column-test`、`--freeze-panes-test`、`--tree-animation-test`、`--numeric-ellipsis-test`、`--freeze-merge-test`。
+- Demo 截图冒烟：`--tree-cell-test`、`--hidden-column-test`、`--freeze-panes-test`、`--tree-animation-test`、`--numeric-ellipsis-test`、`--freeze-merge-test`、`--numeric-link-empty-test`。
 - 既有 API（`HiddenRows`、`SetRowVisible`、`TitleCell`、`LinkCell`、`NumericCell`）行为不变。

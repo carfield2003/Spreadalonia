@@ -577,7 +577,9 @@ namespace Spreadalonia
                 rawData = raw;
             }
 
-            string text = linkCell.GetDisplayText(rawData);
+            // The "…" placeholder of an empty NumericLinkCell is display only: the export has to
+            // see the underlying (empty) value, so an empty cell stays empty in the workbook.
+            string text = linkCell.GetExportText(rawData);
             if (string.IsNullOrEmpty(text))
             {
                 return;
