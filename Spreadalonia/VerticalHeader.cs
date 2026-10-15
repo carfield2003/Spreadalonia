@@ -189,6 +189,9 @@ namespace Spreadalonia
                     }
                 }
             }
+
+            // The action ends with the drag: the pointer handlers must not resize on hover.
+            pointerPressedAction = 0;
         }
 
         protected override void OnPointerMoved(PointerEventArgs e)
@@ -197,48 +200,21 @@ namespace Spreadalonia
 
             PointerPoint currentPoint = e.GetCurrentPoint(this);
 
-            double closest = double.MaxValue;
-            int clickedRow = -1;
+            (int clickedRow, double closest) = ResolveRowHit(currentPoint.Position.Y);
 
-            // Over the frozen strip the drawn coordinates are the table coordinates themselves
-            // (the strip is drawn from its own unscrolled origin starting at row 0); elsewhere
-            // they are the coordinates of the scrollable slice, translated by its drawn offset.
-            bool overFrozen = Owner != null && Owner.IsOverFrozenRows(currentPoint.Position.Y);
-
-            double yPos = overFrozen ? currentPoint.Position.Y : currentPoint.Position.Y - lastDrawnDelta;
-
-            if (lastDrawnYs != null && !overFrozen)
+            // A running resize drag must not depend on the hit testing: past the last drawn edge of a
+            // fixed-size table there is no row to hit, but the drag has to keep working. The button
+            // state still decides whether this is a drag at all: pointerPressedAction stays set after
+            // the button has been released, so hovering must not keep resizing.
+            if (pointerPressedAction == 2 && currentPoint.Properties.IsLeftButtonPressed)
             {
-                for (int i = 0; i < lastDrawnYs.Length; i++)
-                {
-                    if (lastDrawnYs[i] > yPos && yPos >= (i == 0 ? 0 : lastDrawnYs[i - 1]))
-                    {
-                        clickedRow = i + lastDrawnTop;
-                    }
+                double newHeight = Math.Max(10, originalRowHeight + currentPoint.Position.Y - dragStartY);
 
-                    closest = Math.Min(closest, Math.Abs(lastDrawnYs[i] - yPos));
-
-                    if (closest <= 5 && clickedRow >= 0)
-                    {
-                        break;
-                    }
-                }
+                Owner.RowHeights[selectionStartRow] = newHeight;
+                Owner.InvalidateVisual();
+                this.InvalidateVisual();
             }
-
-            // The frozen rows are drawn with their own (unscrolled) origin, so the hit test above does
-            // not describe them: resolve the row index from the frozen strip directly.
-            if (overFrozen)
-            {
-                clickedRow = Owner.GetFrozenRowIndex(currentPoint.Position.Y);
-
-                for (int i = 0; i <= Owner.FrozenRowCount; i++)
-                {
-                    closest = Math.Min(closest, Math.Abs(Owner.GetRowStart(i) - currentPoint.Position.Y));
-                }
-            }
-
-
-            if (clickedRow >= 0)
+            else if (clickedRow >= 0)
             {
 
                 if (!currentPoint.Properties.IsLeftButtonPressed)
@@ -271,14 +247,6 @@ namespace Spreadalonia
                             this.Container.Selection = previousSelection.Difference(new SelectionRange(0, Math.Min(selectionStartRow, clickedRow), Owner.MaxTableWidth, Math.Max(selectionStartRow, clickedRow)));
                         }
                     }
-                    else if (pointerPressedAction == 2)
-                    {
-                        double newHeight = Math.Max(10, originalRowHeight + currentPoint.Position.Y - dragStartY);
-
-                        Owner.RowHeights[selectionStartRow] = newHeight;
-                        Owner.InvalidateVisual();
-                        this.InvalidateVisual();
-                    }
                 }
             }
         }
@@ -295,51 +263,15 @@ namespace Spreadalonia
         {
             base.OnPointerPressed(e);
 
-            double closest = double.MaxValue;
-            int clickedRow = -1;
-
             PointerPoint currentPoint = e.GetCurrentPoint(this);
 
-            // Same coordinate rules as OnPointerMoved: raw table coordinates over the frozen
-            // strip, scrollable slice coordinates elsewhere.
-            bool overFrozen = Owner != null && Owner.IsOverFrozenRows(currentPoint.Position.Y);
-
-            double yPos = overFrozen ? currentPoint.Position.Y : currentPoint.Position.Y - lastDrawnDelta;
-
-            if (lastDrawnYs != null && !overFrozen)
-            {
-                for (int i = 0; i < lastDrawnYs.Length; i++)
-                {
-                    if (lastDrawnYs[i] > yPos && yPos >= (i == 0 ? 0 : lastDrawnYs[i - 1]))
-                    {
-                        clickedRow = i + lastDrawnTop;
-                    }
-
-                    closest = Math.Min(closest, Math.Abs(lastDrawnYs[i] - yPos));
-
-                    if (closest <= 5 && clickedRow >= 0)
-                    {
-                        break;
-                    }
-                }
-            }
-
-            // The frozen rows are drawn with their own (unscrolled) origin, so the hit test above does
-            // not describe them: resolve the row index from the frozen strip directly.
-            if (overFrozen)
-            {
-                clickedRow = Owner.GetFrozenRowIndex(currentPoint.Position.Y);
-
-                for (int i = 0; i <= Owner.FrozenRowCount; i++)
-                {
-                    closest = Math.Min(closest, Math.Abs(Owner.GetRowStart(i) - currentPoint.Position.Y));
-                }
-            }
-
+            // Same hit test as OnPointerMoved; a press within 5px of a drawn row edge starts a
+            // resize instead of selecting the whole row.
+            (int clickedRow, bool isResize) = ResolveRowPress(currentPoint.Position.Y);
 
             if (e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
             {
-                if (closest > 5)
+                if (!isResize)
                 {
                     if (e.KeyModifiers == Spreadsheet.ControlModifier)
                     {
@@ -397,19 +329,6 @@ namespace Spreadalonia
                 }
                 else
                 {
-                    // In the frozen strip the top edge of the row is its table coordinate: the drawn
-                    // coordinates of the scrollable slice do not apply there. Inside the scrollable
-                    // slice the drawn coordinates are relative to the first drawn row, which is not
-                    // row 0 when rows are frozen.
-                    double rowTopEdge = Owner != null && Owner.IsOverFrozenRows(currentPoint.Position.Y)
-                        ? Owner.GetRowStart(clickedRow)
-                        : (clickedRow > lastDrawnTop ? lastDrawnYs[clickedRow - lastDrawnTop - 1] : 0);
-
-                    if (yPos - rowTopEdge <= 5)
-                    {
-                        clickedRow--;
-                    }
-
                     if (e.ClickCount == 1)
                     {
                         pointerPressedAction = 2;
@@ -635,6 +554,115 @@ namespace Spreadalonia
         private int lastDrawnTop = -1;
         private int hoverRow = -1;
         private double lastDrawnDelta = 0;
+
+        /// <summary>
+        /// Resolves which row of the header is under the specified viewport y coordinate, together
+        /// with the distance to the closest drawn row edge. Over the frozen strip the drawn
+        /// coordinates are the table coordinates themselves (the strip is drawn from its own
+        /// unscrolled origin starting at row 0); elsewhere they are the coordinates of the
+        /// scrollable slice, translated by its drawn offset.
+        /// </summary>
+        internal (int row, double closest) ResolveRowHit(double screenY)
+        {
+            double closest = double.MaxValue;
+            int clickedRow = -1;
+
+            bool overFrozen = Owner != null && Owner.IsOverFrozenRows(screenY);
+
+            double yPos = overFrozen ? screenY : screenY - lastDrawnDelta;
+
+            if (lastDrawnYs != null && !overFrozen)
+            {
+                for (int i = 0; i < lastDrawnYs.Length; i++)
+                {
+                    if (lastDrawnYs[i] > yPos && yPos >= (i == 0 ? 0 : lastDrawnYs[i - 1]))
+                    {
+                        clickedRow = i + lastDrawnTop;
+                    }
+
+                    closest = Math.Min(closest, Math.Abs(lastDrawnYs[i] - yPos));
+
+                    if (closest <= 5 && clickedRow >= 0)
+                    {
+                        break;
+                    }
+                }
+            }
+
+            // The frozen rows are drawn with their own (unscrolled) origin, so the hit test above
+            // does not describe them: resolve the row index from the frozen strip directly.
+            if (overFrozen)
+            {
+                clickedRow = Owner.GetFrozenRowIndex(screenY);
+
+                for (int i = 0; i <= Owner.FrozenRowCount; i++)
+                {
+                    closest = Math.Min(closest, Math.Abs(Owner.GetRowStart(i) - screenY));
+                }
+            }
+
+            // Positions past the last drawn edge (a fixed MaxTableHeight means the table ends
+            // before the viewport does) still belong to the last drawn row: the edge is its bottom
+            // border, and pressing it has to resize the row (and clicking further has to select it)
+            // rather than resolving to the non-existent row -1.
+            if (clickedRow < 0 && !overFrozen && lastDrawnYs != null && lastDrawnYs.Length > 0)
+            {
+                clickedRow = lastDrawnTop + lastDrawnYs.Length - 1;
+            }
+
+            return (clickedRow, closest);
+        }
+
+        /// <summary>
+        /// Resolves what a left-button press at the specified viewport y coordinate does in the row
+        /// header: the row it acts on and whether it grabbed a row edge (i.e. starts a row resize)
+        /// rather than selecting the whole row.
+        /// </summary>
+        internal (int row, bool isResize) ResolveRowPress(double screenY)
+        {
+            (int clickedRow, double closest) = ResolveRowHit(screenY);
+
+            if (closest > 5)
+            {
+                return (clickedRow, false);
+            }
+
+            bool overFrozen = Owner != null && Owner.IsOverFrozenRows(screenY);
+
+            double yPos = overFrozen ? screenY : screenY - lastDrawnDelta;
+
+            // In the frozen strip the top edge of the row is its table coordinate: the drawn
+            // coordinates of the scrollable slice do not apply there. Inside the scrollable slice
+            // the drawn coordinates are relative to the first drawn row, which is not row 0 when
+            // rows are frozen.
+            double rowTopEdge = overFrozen
+                ? Owner.GetRowStart(clickedRow)
+                : (lastDrawnYs != null && clickedRow > lastDrawnTop ? lastDrawnYs[clickedRow - lastDrawnTop - 1] : 0);
+
+            if (yPos - rowTopEdge <= 5)
+            {
+                // Dragging the top border of a row resizes the previous *visible* row: a hidden one
+                // has no border of its own and must not be resized.
+                clickedRow = Owner.PreviousVisibleRow(clickedRow);
+            }
+
+            return (clickedRow, true);
+        }
+
+        /// <summary>The index of the first row of the scrollable slice that was drawn last.</summary>
+        internal int LastDrawnTop => lastDrawnTop;
+
+        /// <summary>The number of rows of the scrollable slice that was drawn last.</summary>
+        internal int LastDrawnHeight => lastDrawnYs == null ? -1 : lastDrawnYs.Length - 1;
+
+        /// <summary>The vertical translation applied to the scrollable slice that was drawn last.</summary>
+        internal double LastDrawnDelta => lastDrawnDelta;
+
+        /// <summary>The bottom edges of the rows of the scrollable slice that was drawn last, in drawing coordinates.</summary>
+        internal double[] LastDrawnYs => lastDrawnYs;
+
+        /// <summary>The height of the frozen row strip, clamped to the current size of the header.</summary>
+        internal double ClampedFrozenHeight => Owner == null ? 0 : Owner.GetClampedFrozenHeight(this.Bounds.Height);
 
         public override void Render(DrawingContext context)
         {

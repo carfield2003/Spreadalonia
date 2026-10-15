@@ -533,6 +533,18 @@ namespace Spreadalonia
         }
 
         /// <summary>
+        /// The column (horizontal) header control. Exposed to the internal test host so that the
+        /// header hit testing can be exercised for a given layout without a pointer device.
+        /// </summary>
+        internal HorizontalHeader HorizontalHeaderControlInternal => HorizontalHeaderControl;
+
+        /// <summary>
+        /// The row (vertical) header control. Exposed to the internal test host so that the header
+        /// hit testing can be exercised for a given layout without a pointer device.
+        /// </summary>
+        internal VerticalHeader VerticalHeaderControlInternal => VerticalHeaderControl;
+
+        /// <summary>
         /// Hides the specified column. Same as <see cref="SetColumnVisible(int, bool)"/> with
         /// <paramref name="visible"/> = <see langword="false"/>.
         /// </summary>

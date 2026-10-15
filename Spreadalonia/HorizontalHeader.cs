@@ -216,6 +216,9 @@ namespace Spreadalonia
                     }
                 }
             }
+
+            // The action ends with the drag: the pointer handlers must not resize on hover.
+            pointerPressedAction = 0;
         }
 
         protected override void OnPointerMoved(PointerEventArgs e)
@@ -224,48 +227,21 @@ namespace Spreadalonia
 
             PointerPoint currentPoint = e.GetCurrentPoint(this);
 
-            double closest = double.MaxValue;
-            int clickedColumn = -1;
+            (int clickedColumn, double closest) = ResolveColumnHit(currentPoint.Position.X);
 
-            // Over the frozen strip the drawn coordinates are the table coordinates themselves
-            // (the strip is drawn from its own unscrolled origin starting at column 0); elsewhere
-            // they are the coordinates of the scrollable slice, translated by its drawn offset.
-            bool overFrozen = Owner != null && Owner.IsOverFrozenColumns(currentPoint.Position.X);
-
-            double xPos = overFrozen ? currentPoint.Position.X : currentPoint.Position.X - lastDrawnDelta;
-
-            if (lastDrawnXs != null && !overFrozen)
+            // A running resize drag must not depend on the hit testing: past the last drawn edge of a
+            // fixed-size table there is no column to hit, but the drag has to keep working. The
+            // button state still decides whether this is a drag at all: pointerPressedAction stays
+            // set after the button has been released, so hovering must not keep resizing.
+            if (pointerPressedAction == 2 && currentPoint.Properties.IsLeftButtonPressed)
             {
-                for (int i = 0; i < lastDrawnXs.Length; i++)
-                {
-                    if (lastDrawnXs[i] > xPos && xPos >= (i == 0 ? 0 : lastDrawnXs[i - 1]))
-                    {
-                        clickedColumn = i + lastDrawnLeft;
-                    }
+                double newWidth = Math.Max(10, originalColumnWidth + currentPoint.Position.X - dragStartX);
 
-                    closest = Math.Min(closest, Math.Abs(lastDrawnXs[i] - xPos));
-
-                    if (closest <= 5 && clickedColumn >= 0)
-                    {
-                        break;
-                    }
-                }
+                Owner.ColumnWidths[selectionStartColumn] = newWidth;
+                Owner.InvalidateVisual();
+                this.InvalidateVisual();
             }
-
-            // The frozen columns are drawn with their own (unscrolled) origin, so the hit test above
-            // does not describe them: resolve the column index from the frozen strip directly.
-            if (overFrozen)
-            {
-                clickedColumn = Owner.GetFrozenColumnIndex(currentPoint.Position.X);
-
-                for (int i = 0; i <= Owner.FrozenColumnCount; i++)
-                {
-                    closest = Math.Min(closest, Math.Abs(Owner.GetColumnStart(i) - currentPoint.Position.X));
-                }
-            }
-
-
-            if (clickedColumn >= 0)
+            else if (clickedColumn >= 0)
             {
                 if (!currentPoint.Properties.IsLeftButtonPressed)
                 {
@@ -298,14 +274,6 @@ namespace Spreadalonia
                             this.Container.Selection = previousSelection.Difference(new SelectionRange(Math.Min(selectionStartColumn, clickedColumn), 0, Math.Max(selectionStartColumn, clickedColumn), Owner.MaxTableHeight));
                         }
                     }
-                    else if (pointerPressedAction == 2)
-                    {
-                        double newWidth = Math.Max(10, originalColumnWidth + currentPoint.Position.X - dragStartX);
-
-                        Owner.ColumnWidths[selectionStartColumn] = newWidth;
-                        Owner.InvalidateVisual();
-                        this.InvalidateVisual();
-                    }
                 }
             }
         }
@@ -322,51 +290,15 @@ namespace Spreadalonia
         {
             base.OnPointerPressed(e);
 
-            double closest = double.MaxValue;
-            int clickedColumn = -1;
-
             PointerPoint currentPoint = e.GetCurrentPoint(this);
 
-            // Same coordinate rules as OnPointerMoved: raw table coordinates over the frozen
-            // strip, scrollable slice coordinates elsewhere.
-            bool overFrozen = Owner != null && Owner.IsOverFrozenColumns(currentPoint.Position.X);
-
-            double xPos = overFrozen ? currentPoint.Position.X : currentPoint.Position.X - lastDrawnDelta;
-
-            if (lastDrawnXs != null && !overFrozen)
-            {
-                for (int i = 0; i < lastDrawnXs.Length; i++)
-                {
-                    if (lastDrawnXs[i] > xPos && xPos >= (i == 0 ? 0 : lastDrawnXs[i - 1]))
-                    {
-                        clickedColumn = i + lastDrawnLeft;
-                    }
-
-                    closest = Math.Min(closest, Math.Abs(lastDrawnXs[i] - xPos));
-
-                    if (closest <= 5 && clickedColumn >= 0)
-                    {
-                        break;
-                    }
-                }
-            }
-
-            // The frozen columns are drawn with their own (unscrolled) origin, so the hit test above
-            // does not describe them: resolve the column index from the frozen strip directly.
-            if (overFrozen)
-            {
-                clickedColumn = Owner.GetFrozenColumnIndex(currentPoint.Position.X);
-
-                for (int i = 0; i <= Owner.FrozenColumnCount; i++)
-                {
-                    closest = Math.Min(closest, Math.Abs(Owner.GetColumnStart(i) - currentPoint.Position.X));
-                }
-            }
-
+            // Same hit test as OnPointerMoved; a press within 5px of a drawn column edge starts a
+            // resize instead of selecting the whole column.
+            (int clickedColumn, bool isResize) = ResolveColumnPress(currentPoint.Position.X);
 
             if (e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
             {
-                if (closest > 5)
+                if (!isResize)
                 {
                     if (e.KeyModifiers == Spreadsheet.ControlModifier)
                     {
@@ -424,21 +356,6 @@ namespace Spreadalonia
                 }
                 else
                 {
-                    // In the frozen strip the left edge of the column is its table coordinate: the
-                    // drawn coordinates of the scrollable slice do not apply there. Inside the
-                    // scrollable slice the drawn coordinates are relative to the first drawn
-                    // column, which is not column 0 when columns are frozen.
-                    double columnLeftEdge = Owner != null && Owner.IsOverFrozenColumns(currentPoint.Position.X)
-                        ? Owner.GetColumnStart(clickedColumn)
-                        : (clickedColumn > lastDrawnLeft ? lastDrawnXs[clickedColumn - lastDrawnLeft - 1] : 0);
-
-                    if (xPos - columnLeftEdge <= 5)
-                    {
-                        // Dragging the left border of a column resizes the previous *visible*
-                        // column: a hidden one has no border of its own and must not be resized.
-                        clickedColumn = Owner.NextVisibleColumn(clickedColumn, -1);
-                    }
-
                     if (e.ClickCount == 1)
                     {
                         pointerPressedAction = 2;
@@ -690,10 +607,121 @@ namespace Spreadalonia
             return tbr;
         }
 
+        /// <summary>
+        /// Resolves which column of the header is under the specified viewport x coordinate,
+        /// together with the distance to the closest drawn column edge. Over the frozen strip the
+        /// drawn coordinates are the table coordinates themselves (the strip is drawn from its own
+        /// unscrolled origin starting at column 0); elsewhere they are the coordinates of the
+        /// scrollable slice, translated by its drawn offset.
+        /// </summary>
+        internal (int column, double closest) ResolveColumnHit(double screenX)
+        {
+            double closest = double.MaxValue;
+            int clickedColumn = -1;
+
+            bool overFrozen = Owner != null && Owner.IsOverFrozenColumns(screenX);
+
+            double xPos = overFrozen ? screenX : screenX - lastDrawnDelta;
+
+            if (lastDrawnXs != null && !overFrozen)
+            {
+                for (int i = 0; i < lastDrawnXs.Length; i++)
+                {
+                    if (lastDrawnXs[i] > xPos && xPos >= (i == 0 ? 0 : lastDrawnXs[i - 1]))
+                    {
+                        clickedColumn = i + lastDrawnLeft;
+                    }
+
+                    closest = Math.Min(closest, Math.Abs(lastDrawnXs[i] - xPos));
+
+                    if (closest <= 5 && clickedColumn >= 0)
+                    {
+                        break;
+                    }
+                }
+            }
+
+            // The frozen columns are drawn with their own (unscrolled) origin, so the hit test above
+            // does not describe them: resolve the column index from the frozen strip directly.
+            if (overFrozen)
+            {
+                clickedColumn = Owner.GetFrozenColumnIndex(screenX);
+
+                for (int i = 0; i <= Owner.FrozenColumnCount; i++)
+                {
+                    closest = Math.Min(closest, Math.Abs(Owner.GetColumnStart(i) - screenX));
+                }
+            }
+
+            // Positions past the last drawn edge (a fixed MaxTableWidth means the table ends before
+            // the viewport does) still belong to the last drawn column: the edge is its right
+            // border, and pressing it has to resize the column (and clicking further has to select
+            // it) rather than resolving to the non-existent column -1.
+            if (clickedColumn < 0 && !overFrozen && lastDrawnXs != null && lastDrawnXs.Length > 0)
+            {
+                clickedColumn = lastDrawnLeft + lastDrawnXs.Length - 1;
+            }
+
+            return (clickedColumn, closest);
+        }
+
+        /// <summary>
+        /// Resolves what a left-button press at the specified viewport x coordinate does in the
+        /// column header: the column it acts on and whether it grabbed a column edge (i.e. starts a
+        /// column resize) rather than selecting the whole column.
+        /// </summary>
+        internal (int column, bool isResize) ResolveColumnPress(double screenX)
+        {
+            (int clickedColumn, double closest) = ResolveColumnHit(screenX);
+
+            if (closest > 5)
+            {
+                return (clickedColumn, false);
+            }
+
+            bool overFrozen = Owner != null && Owner.IsOverFrozenColumns(screenX);
+
+            double xPos = overFrozen ? screenX : screenX - lastDrawnDelta;
+
+            // In the frozen strip the left edge of the column is its table coordinate: the drawn
+            // coordinates of the scrollable slice do not apply there. Inside the scrollable slice
+            // the drawn coordinates are relative to the first drawn column, which is not column 0
+            // when columns are frozen.
+            double columnLeftEdge = overFrozen
+                ? Owner.GetColumnStart(clickedColumn)
+                : (lastDrawnXs != null && clickedColumn > lastDrawnLeft ? lastDrawnXs[clickedColumn - lastDrawnLeft - 1] : 0);
+
+            if (xPos - columnLeftEdge <= 5)
+            {
+                // Dragging the left border of a column resizes the previous *visible* column: a
+                // hidden one has no border of its own and must not be resized. The search is not
+                // bounded by the columns that carry data, so that the border between the last
+                // columns of the sheet still resizes the column on its left.
+                clickedColumn = Owner.PreviousVisibleColumn(clickedColumn);
+            }
+
+            return (clickedColumn, true);
+        }
+
         private double[] lastDrawnXs = null;
         private int lastDrawnLeft = -1;
         private int hoverColumn = -1;
         double lastDrawnDelta = 0;
+
+        /// <summary>The index of the first column of the scrollable slice that was drawn last.</summary>
+        internal int LastDrawnLeft => lastDrawnLeft;
+
+        /// <summary>The number of columns of the scrollable slice that was drawn last.</summary>
+        internal int LastDrawnWidth => lastDrawnXs == null ? -1 : lastDrawnXs.Length - 1;
+
+        /// <summary>The horizontal translation applied to the scrollable slice that was drawn last.</summary>
+        internal double LastDrawnDelta => lastDrawnDelta;
+
+        /// <summary>The right edges of the columns of the scrollable slice that was drawn last, in drawing coordinates.</summary>
+        internal double[] LastDrawnXs => lastDrawnXs;
+
+        /// <summary>The width of the frozen column strip, clamped to the current size of the header.</summary>
+        internal double ClampedFrozenWidth => Owner == null ? 0 : Owner.GetClampedFrozenWidth(this.Bounds.Width);
 
         public override void Render(DrawingContext context)
         {

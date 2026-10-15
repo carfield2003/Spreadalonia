@@ -328,6 +328,84 @@ namespace Demo
                 };
             }
 
+            // Simulates column resizing in the header for the freeze + merged title scene when one of
+            // the columns after the frozen strip is hidden: after a real render the header publishes
+            // the right edge of every drawn column, and the pointer is placed on each of those edges
+            // (plus on the right edge of the viewport) to see which column the header would resize.
+            // The last visible column must be resizable from its right edge in every case.
+            if (Environment.GetCommandLineArgs().Any(a => a == "--freeze-hidden-resize-test"))
+            {
+                Opened += async (_, _) =>
+                {
+                    try
+                    {
+                        await System.Threading.Tasks.Task.Delay(500);
+
+                        foreach (int hiddenColumn in new int[] { -1, 2, 3, 4, 1 })
+                        {
+                            LoadFreezeMergeDemo();
+
+                            if (hiddenColumn >= 0)
+                            {
+                                SpreadsheetControl.HideColumn(hiddenColumn);
+                            }
+
+                            SpreadsheetControl.Refresh();
+                            await System.Threading.Tasks.Task.Delay(400);
+
+                            // A real render publishes the drawn column edges of the header.
+                            SaveScreenshot($@"C:\Users\89664\Desktop\freeze_hidden_resize_{hiddenColumn}.png");
+
+                            ReportHeaderHitTest(hiddenColumn);
+                            ReportLastVisibleEdge(hiddenColumn);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine("[Test] EXCEPTION: " + ex);
+                    }
+                    finally
+                    {
+                        Environment.Exit(0);
+                    }
+                };
+            }
+
+            // Simulates resizing the last column / row of a table whose size is fixed (MaxTableWidth
+            // / MaxTableHeight set to the data extent, like the 辅助核算 pages do): the last drawn
+            // edge is then the end of the table and there is no next column / row beyond it. The
+            // pointer is placed around the last drawn edges to check that every grab position
+            // (including slightly past the end of the table) resizes / selects the last column or
+            // row.
+            if (Environment.GetCommandLineArgs().Any(a => a == "--fixed-size-resize-test"))
+            {
+                Opened += async (_, _) =>
+                {
+                    try
+                    {
+                        await System.Threading.Tasks.Task.Delay(500);
+
+                        LoadFreezeMergeDemo();
+                        SpreadsheetControl.MaxTableWidth = 8;
+                        SpreadsheetControl.MaxTableHeight = 13;
+                        SpreadsheetControl.Refresh();
+                        await System.Threading.Tasks.Task.Delay(400);
+
+                        SaveScreenshot(@"C:\Users\89664\Desktop\fixed_size_resize.png");
+
+                        ReportFixedSizeHitTest();
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine("[Test] EXCEPTION: " + ex);
+                    }
+                    finally
+                    {
+                        Environment.Exit(0);
+                    }
+                };
+            }
+
             // Automated screenshot test for the tree expand / collapse animation: shoots the sheet
             // mid-animation (rows are still growing / shrinking and fading) and after the animation
             // has finished (final state must match the non-animated result).
@@ -1428,6 +1506,278 @@ namespace Demo
         {
             LoadFreezeMergeDemo();
         }
+
+        /// <summary>
+        /// Exercises the header hit testing for the scene that is currently loaded: once the header
+        /// has been really rendered (so it knows the drawn edges of every visible column), the
+        /// pointer is placed on each of those edges and on the right edge of the viewport, and the
+        /// column the header would resize from there is reported. The last visible column must be
+        /// resizable from its own right edge in every case.
+        /// </summary>
+        private void ReportHeaderHitTest(int hiddenColumn)
+        {
+            HorizontalHeader header = SpreadsheetControl.HorizontalHeaderControlInternal;
+
+            int lastColumn = header.LastDrawnLeft + header.LastDrawnWidth;
+
+            Console.WriteLine("[Test] ===== hidden column: " + (hiddenColumn < 0 ? "none" : hiddenColumn.ToString())
+                + ", header width=" + header.Bounds.Width.ToString("0.#")
+                + ", frozen columns=" + SpreadsheetControl.FrozenColumnCount
+                + ", drawn columns " + header.LastDrawnLeft + ".." + lastColumn + " =====");
+
+            double[] xs = header.LastDrawnXs;
+
+            if (xs == null)
+            {
+                Console.WriteLine("[Test] the header has not been rendered yet");
+                return;
+            }
+
+            bool lastColumnResizable = false;
+
+            for (int i = 0; i < xs.Length; i++)
+            {
+                double screenX = xs[i] + header.LastDrawnDelta;
+                (int column, bool isResize) = header.ResolveColumnPress(screenX);
+
+                Console.WriteLine("[Test]   right edge of column " + (header.LastDrawnLeft + i)
+                    + " at x=" + screenX.ToString("0.#")
+                    + " -> resize column " + column + " (isResize=" + isResize + ")");
+
+                if (isResize && column == lastColumn)
+                {
+                    lastColumnResizable = true;
+                }
+            }
+
+            double viewportRight = header.Bounds.Width - 0.5;
+            (int edgeColumn, bool edgeResize) = header.ResolveColumnPress(viewportRight);
+
+            Console.WriteLine("[Test]   right edge of the viewport at x=" + viewportRight.ToString("0.#")
+                + " -> resize column " + edgeColumn + " (isResize=" + edgeResize + ")");
+
+            if (edgeResize && edgeColumn == lastColumn)
+            {
+                lastColumnResizable = true;
+            }
+
+            Console.WriteLine("[Test] last visible column = " + lastColumn
+                + ", resizable from one of the drawn edges: " + lastColumnResizable);
+        }
+
+        /// <summary>
+        /// Reports, for the scene that is currently loaded, which column would be resized by a drag
+        /// that starts on the last column edge that is visible inside the viewport, and how much of
+        /// that column is actually visible (a column whose right edge is outside the viewport grows
+        /// only outside the viewport, so dragging its left border produces no visible feedback).
+        /// </summary>
+        private void ReportLastVisibleEdge(int hiddenColumn)
+        {
+            HorizontalHeader header = SpreadsheetControl.HorizontalHeaderControlInternal;
+            double[] xs = header.LastDrawnXs;
+
+            if (xs == null)
+            {
+                return;
+            }
+
+            double delta = header.LastDrawnDelta;
+            double viewportRight = header.Bounds.Width;
+            double viewportLeft = header.ClampedFrozenWidth;
+
+            int edge = -1;
+
+            for (int i = 0; i < xs.Length; i++)
+            {
+                if (xs[i] + delta < viewportRight)
+                {
+                    edge = i;
+                }
+            }
+
+            if (edge < 0)
+            {
+                return;
+            }
+
+            double edgeX = xs[edge] + delta;
+            (int target, bool isResize) = header.ResolveColumnPress(edgeX);
+
+            Console.WriteLine("[Test]   hidden=" + (hiddenColumn < 0 ? "none" : hiddenColumn.ToString())
+                + ": last edge inside the viewport is x=" + edgeX.ToString("0.#")
+                + " (right edge of column " + (header.LastDrawnLeft + edge) + ")"
+                + " -> drag resizes column " + target + " (isResize=" + isResize + ")");
+
+            if (target >= header.LastDrawnLeft && target <= header.LastDrawnLeft + header.LastDrawnWidth)
+            {
+                int j = target - header.LastDrawnLeft;
+                double left = (j == 0 ? 0 : xs[j - 1]) + delta;
+                double right = xs[j] + delta;
+                double visibleLeft = Math.Max(left, viewportLeft);
+                double visibleRight = Math.Min(right, viewportRight);
+
+                Console.WriteLine("[Test]     column " + target + " spans x=" + left.ToString("0.#") + ".." + right.ToString("0.#")
+                    + ", visible part x=" + visibleLeft.ToString("0.#") + ".." + visibleRight.ToString("0.#")
+                    + " (visible width " + Math.Max(0, visibleRight - visibleLeft).ToString("0.#")
+                    + "), right edge inside the viewport: " + (right < viewportRight));
+            }
+        }
+
+        /// <summary>
+        /// Exercises the header hit testing around the last drawn column / row edges of a
+        /// fixed-size table: every grab position around an edge (on it, on either side within the
+        /// 5px tolerance, and just outside it) must resolve to the last column / row, both for the
+        /// resize action and (further away) for the selection.
+        /// </summary>
+        private void ReportFixedSizeHitTest()
+        {
+            HorizontalHeader columnHeader = SpreadsheetControl.HorizontalHeaderControlInternal;
+            VerticalHeader rowHeader = SpreadsheetControl.VerticalHeaderControlInternal;
+
+            Console.WriteLine("[Test] ===== fixed-size table: MaxTableWidth=" + SpreadsheetControl.MaxTableWidth
+                + ", MaxTableHeight=" + SpreadsheetControl.MaxTableHeight
+                + ", header " + columnHeader.Bounds.Width.ToString("0.#") + "x" + rowHeader.Bounds.Height.ToString("0.#")
+                + ", frozen columns=" + SpreadsheetControl.FrozenColumnCount + " =====");
+
+            double[] xs = columnHeader.LastDrawnXs;
+            double[] ys = rowHeader.LastDrawnYs;
+
+            if (xs == null || ys == null)
+            {
+                Console.WriteLine("[Test] the headers have not been rendered yet");
+                return;
+            }
+
+            int lastColumn = columnHeader.LastDrawnLeft + columnHeader.LastDrawnWidth;
+            int lastRow = rowHeader.LastDrawnTop + rowHeader.LastDrawnHeight;
+
+            double lastColumnEdge = xs[xs.Length - 1] + columnHeader.LastDrawnDelta;
+            double lastRowEdge = ys[ys.Length - 1] + rowHeader.LastDrawnDelta;
+
+            Console.WriteLine("[Test] drawn columns " + columnHeader.LastDrawnLeft + ".." + lastColumn
+                + ", last right edge at x=" + lastColumnEdge.ToString("0.#")
+                + "; drawn rows " + rowHeader.LastDrawnTop + ".." + lastRow
+                + ", last bottom edge at y=" + lastRowEdge.ToString("0.#"));
+
+            bool allColumnsOk = true;
+
+            foreach (double dx in new double[] { -8, -3, 0, 3, 8, 30 })
+            {
+                (int column, bool isResize) = columnHeader.ResolveColumnPress(lastColumnEdge + dx);
+                (int oldColumn, bool oldResize) = ResolveColumnPressLegacy(columnHeader, lastColumnEdge + dx);
+
+                // Every position hits the last column; grabbing within 5px of the edge resizes it.
+                allColumnsOk &= column == lastColumn && isResize == (Math.Abs(dx) <= 5);
+
+                Console.WriteLine("[Test]   column edge x=" + (lastColumnEdge + dx).ToString("0.#") + " (dx=" + dx + ")"
+                    + " -> column " + column + " (isResize=" + isResize + ")"
+                    + " | v1.7.4: column " + oldColumn + " (isResize=" + oldResize + ")");
+            }
+
+            Console.WriteLine("[Test] last column " + lastColumn + " hit from every grab position and resizable within 5px: " + allColumnsOk);
+
+            bool allRowsOk = true;
+
+            foreach (double dy in new double[] { -8, -3, 0, 3, 8, 30 })
+            {
+                (int row, bool isResize) = rowHeader.ResolveRowPress(lastRowEdge + dy);
+                (int oldRow, bool oldResize) = ResolveRowPressLegacy(rowHeader, lastRowEdge + dy);
+
+                allRowsOk &= row == lastRow && isResize == (Math.Abs(dy) <= 5);
+
+                Console.WriteLine("[Test]   row edge y=" + (lastRowEdge + dy).ToString("0.#") + " (dy=" + dy + ")"
+                    + " -> row " + row + " (isResize=" + isResize + ")"
+                    + " | v1.7.4: row " + oldRow + " (isResize=" + oldResize + ")");
+            }
+
+            Console.WriteLine("[Test] last row " + lastRow + " hit from every grab position and resizable within 5px: " + allRowsOk);
+        }
+
+        /// <summary>
+        /// Replays the hit testing of v1.7.4 (no clamping to the last drawn edge, and a resize drag
+        /// that is ignored as soon as the resolved column / row is -1), so that the fixed-size test
+        /// can report the behaviour before and after the fix side by side.
+        /// </summary>
+        private (int column, bool isResize) ResolveColumnPressLegacy(HorizontalHeader header, double screenX)
+        {
+            double[] xs = header.LastDrawnXs;
+            double xPos = screenX - header.LastDrawnDelta;
+
+            double closest = double.MaxValue;
+            int clickedColumn = -1;
+
+            for (int i = 0; i < xs.Length; i++)
+            {
+                if (xs[i] > xPos && xPos >= (i == 0 ? 0 : xs[i - 1]))
+                {
+                    clickedColumn = i + header.LastDrawnLeft;
+                }
+
+                closest = Math.Min(closest, Math.Abs(xs[i] - xPos));
+
+                if (closest <= 5 && clickedColumn >= 0)
+                {
+                    break;
+                }
+            }
+
+            if (closest > 5)
+            {
+                return (clickedColumn, false);
+            }
+
+            double columnLeftEdge = clickedColumn > header.LastDrawnLeft ? xs[clickedColumn - header.LastDrawnLeft - 1] : 0;
+
+            if (xPos - columnLeftEdge <= 5)
+            {
+                clickedColumn--;
+            }
+
+            return (clickedColumn, true);
+        }
+
+        private (int row, bool isResize) ResolveRowPressLegacy(VerticalHeader header, double screenY)
+        {
+            double[] ys = header.LastDrawnYs;
+            double yPos = screenY - header.LastDrawnDelta;
+
+            double closest = double.MaxValue;
+            int clickedRow = -1;
+
+            for (int i = 0; i < ys.Length; i++)
+            {
+                if (ys[i] > yPos && yPos >= (i == 0 ? 0 : ys[i - 1]))
+                {
+                    clickedRow = i + header.LastDrawnTop;
+                }
+
+                closest = Math.Min(closest, Math.Abs(ys[i] - yPos));
+
+                if (closest <= 5 && clickedRow >= 0)
+                {
+                    break;
+                }
+            }
+
+            if (closest > 5)
+            {
+                return (clickedRow, false);
+            }
+
+            double rowTopEdge = clickedRow > header.LastDrawnTop ? ys[clickedRow - header.LastDrawnTop - 1] : 0;
+
+            if (yPos - rowTopEdge <= 5)
+            {
+                clickedRow--;
+            }
+
+            return (clickedRow, true);
+        }
+
+
+
+
+
 
         /// <summary>
         /// Builds the small 试算平衡表 sheet used by the "--freeze-merge-test" screenshot test: the

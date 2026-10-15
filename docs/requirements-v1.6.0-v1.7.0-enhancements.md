@@ -1,4 +1,4 @@
-# Spreadalonia 增强批次验收记录 v1.6.0 – v1.7.4
+# Spreadalonia 增强批次验收记录 v1.6.0 – v1.7.5
 ## 目标：补齐 SSFinance 从 WPF（ReoGrid）迁移到 Avalonia（Spreadalonia）的四项能力
 
 > 本文档记录本批次（列隐藏、辅助项选择单元格、冻结行列、树形展开/折叠动画）的需求、API 与验收结果。
@@ -18,6 +18,7 @@
 | 1.7.2 | 数值单元格省略号截断（NumericCell / NumericLinkCell） | P1 | 已完成并验证 |
 | 1.7.3 | 合并单元格跨冻结边界重复渲染修复 | P0 | 已完成并验证 |
 | 1.7.4 | 跨冻结边界合并单元格整体居中 + 冻结态表头拖拽改尺寸修复 | P0 | 已完成并验证 |
+| 1.7.5 | 固定尺寸表格（MaxTableWidth/MaxTableHeight）最后一列/行无法调整尺寸修复 | P0 | 已完成并验证 |
 
 ---
 
@@ -204,6 +205,41 @@ v1.7.3 消除了重复绘制，但标题文本不再跨冻结分隔线居中（�
 ### 验收
 - Demo 新增「Freeze + Merged Title Demo」按钮，与 `--freeze-merge-test` 共用同一方法
   `LoadFreezeMergeDemo()`，可交互验证：标题跨冻结线居中且只有一份，可拖动任意列分隔线（含最右列）。
+- `--freeze-merge-test`、`--freeze-panes-test`、`--hidden-column-test`、`--tree-cell-test`、
+  `--numeric-ellipsis-test` 回归通过。
+
+---
+
+## 九、固定尺寸表格最后一列/行无法调整尺寸（v1.7.5）
+
+实际业务页（如辅助核算）会把 `MaxTableWidth` / `MaxTableHeight` 设成数据的列数/行数
+（例如 8 列 × 13 行）。此时表格末端就在视口内部，最后一列的列宽、最后一行的行高完全拖不动。
+
+### 根因
+- `MaxTableWidth` / `MaxTableHeight` 是**列数/行数上限**：`GetRangeX` / `GetRangeY` 用它截断绘制
+  循环，因此最后一条绘制线就是表格终点，其外侧不再存在「下一列/下一行」。
+- 命中的段判定为 `xs[i] > xPos`（指针必须严格落在某个列段内）。指针落在最后一条线上或其外侧时
+  `clickedColumn = -1`（行方向 `clickedRow = -1`），而 `OnPointerMoved` 有
+  `if (clickedColumn >= 0)` / `if (clickedRow >= 0)` 的门 → 拖拽被整体忽略；`OnPointerReleased`
+  只会把宽度写进 `ColumnWidths[-1]` / `RowHeights[-1]`，没有任何可见效果。
+- Demo 复现不了：`LoadFreezeMergeDemo()` 把 `MaxTableWidth/Height` 放开到 `int.MaxValue`，
+  最后一条线外侧永远是空白列/行，从右侧抓边缘会命中「下一列的左边缘」并回退到前一可见列。
+
+### 修复
+- `HorizontalHeader.ResolveColumnHit`：位于/越过最后一条绘制线时，一律钳制到**最后绘制列**
+  （原先只在 `closest <= 5` 时兜底），点击表格外侧的空白区也选中最后一列而不是 `-1`。
+- `VerticalHeader` 抽出与列方向对称的 `ResolveRowHit` / `ResolveRowPress`（原先是两处重复代码），
+  加同样的钳制，并沿用 `PreviousVisibleRow` 跳过隐藏行。
+- 两个表头的 `OnPointerMoved`：正在进行的改尺寸拖拽不再依赖命中判定（指针越过表格末端也继续跟随）；
+  但**仍以按钮状态判定是否为拖拽**（`pointerPressedAction == 2 && IsLeftButtonPressed`），
+  `OnPointerReleased` 末尾复位 `pointerPressedAction = 0`，避免悬停即改尺寸。
+- `Spreadsheet` 暴露 `VerticalHeaderControlInternal`（内部，仅测试用）。
+
+### 验收
+- Demo 新增 `--fixed-size-resize-test`：按业务页方式设 8 列 × 13 行（A:B 冻结），
+  在最后一条列线/行线的 ±8 / ±3 / 0 / +30 处重放命中逻辑，并对照重放 v1.7.4 的旧逻辑。
+  修复后所有位置都命中最后列（7）/最后行（12），其中 ±5px 内进入改尺寸；
+  旧逻辑在线上及其外侧一律得到 `-1`（拖拽无效），只有从线左侧抓才有效。
 - `--freeze-merge-test`、`--freeze-panes-test`、`--hidden-column-test`、`--tree-cell-test`、
   `--numeric-ellipsis-test` 回归通过。
 

@@ -1003,6 +1003,34 @@ namespace Spreadalonia
         }
 
         /// <summary>
+        /// Returns the closest visible column to the left of <paramref name="column"/>, or
+        /// <paramref name="column"/> itself when there is none. Unlike
+        /// <see cref="NextVisibleColumn"/> the search is not bounded by the columns that are
+        /// referenced by the data: resizing a column works over the whole sheet, because the right
+        /// border of a column belongs to the previous visible column even when that column carries
+        /// no data at all (the sheet always has more empty columns to the right of the last one
+        /// that contains something).
+        /// </summary>
+        /// <param name="column">The column to start from (exclusive).</param>
+        /// <returns>The previous visible column, or <paramref name="column"/> when there is none.</returns>
+        internal int PreviousVisibleColumn(int column)
+        {
+            int candidate = column - 1;
+
+            while (candidate >= 0)
+            {
+                if (IsColumnVisible(candidate))
+                {
+                    return candidate;
+                }
+
+                candidate--;
+            }
+
+            return column;
+        }
+
+        /// <summary>
         /// Returns the highest column index that is referenced by the cell data, the tree cells or
         /// the column widths. Used to bound the search performed by <see cref="NextVisibleColumn"/>.
         /// </summary>
@@ -1471,6 +1499,32 @@ namespace Spreadalonia
                 }
 
                 candidate += step;
+            }
+
+            return row;
+        }
+
+        /// <summary>
+        /// Returns the closest visible row above <paramref name="row"/>, or <paramref name="row"/>
+        /// itself when there is none. Unlike <see cref="NextVisibleRow"/> the search is not bounded
+        /// by the rows that are referenced by the data: resizing a row works over the whole sheet,
+        /// because the bottom border of a row belongs to the previous visible row even when that row
+        /// carries no data at all.
+        /// </summary>
+        /// <param name="row">The row to start from (exclusive).</param>
+        /// <returns>The previous visible row, or <paramref name="row"/> when there is none.</returns>
+        internal int PreviousVisibleRow(int row)
+        {
+            int candidate = row - 1;
+
+            while (candidate >= 0)
+            {
+                if (IsRowVisible(candidate))
+                {
+                    return candidate;
+                }
+
+                candidate--;
             }
 
             return row;
