@@ -1,6 +1,6 @@
 # Spreadalonia 基本功能使用说明
 
-> **版本**: 1.9.0 | **目标框架**: .NET Standard 2.0 | **UI 框架**: Avalonia 11  
+> **版本**: 1.9.1 | **目标框架**: .NET Standard 2.0 | **UI 框架**: Avalonia 11  
 > **许可证**: LGPL v3 | **作者**: Giorgio Bianchini, University of Bristol; carfield2003  
 > 本文档涵盖公式引擎以外的所有基本功能，公式引擎的使用请参考 `公式与自定义函数使用说明.md`。
 > v1.9.0 新增：多工作表（第 11 章）与 Excel `.xlsx` 导入/导出（第 12 章）。
