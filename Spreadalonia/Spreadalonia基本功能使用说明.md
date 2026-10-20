@@ -1,8 +1,9 @@
 # Spreadalonia 基本功能使用说明
 
-> **版本**: 1.1.1 | **目标框架**: .NET Standard 2.0 | **UI 框架**: Avalonia 11  
+> **版本**: 1.9.0 | **目标框架**: .NET Standard 2.0 | **UI 框架**: Avalonia 11  
 > **许可证**: LGPL v3 | **作者**: Giorgio Bianchini, University of Bristol; carfield2003  
 > 本文档涵盖公式引擎以外的所有基本功能，公式引擎的使用请参考 `公式与自定义函数使用说明.md`。
+> v1.9.0 新增：多工作表（第 11 章）与 Excel `.xlsx` 导入/导出（第 12 章）。
 
 ---
 
@@ -18,12 +19,14 @@
 8. [剪贴板操作](#剪贴板操作)
 9. [撤销与重做](#撤销与重做)
 10. [序列化与加载](#序列化与加载)
-11. [事件](#事件)
-12. [键盘快捷键](#键盘快捷键)
-13. [右键菜单](#右键菜单)
-14. [其他交互功能](#其他交互功能)
-15. [SelectionRange 说明](#selectionrange-结构)
-16. [完整 API 速查表](#完整-api-速查表)
+11. [多工作表（Sheet）](#多工作表sheet)
+12. [Excel xlsx 导入与导出](#excel-xlsx-导入与导出)
+13. [事件](#事件)
+14. [键盘快捷键](#键盘快捷键)
+15. [右键菜单](#右键菜单)
+16. [其他交互功能](#其他交互功能)
+17. [SelectionRange 说明](#selectionrange-结构)
+18. [完整 API 速查表](#完整-api-速查表)
 
 ---
 
@@ -508,6 +511,8 @@ if (spreadsheet.CanRedo)
 
 撤销/重做栈覆盖：数据变更、格式变更（字体、颜色、对齐、边距）、行列调整（高度、宽度）、插入/删除行列。所有通过公开 API 执行的操作都会被记录。
 
+> **多工作表时**：切换当前工作表会清空撤销/重做栈，撤销不会跨表回滚（详见[第 11 章](#多工作表sheet)）。
+
 ---
 
 ## 序列化与加载
@@ -586,6 +591,217 @@ string[][] rows = Spreadsheet.SplitData(
 
 ---
 
+## 多工作表（Sheet）
+
+自 v1.9.0 起，一个 `Spreadsheet` 控件可以包含多张工作表（`SpreadsheetSheet`），底部自带页签栏（`SheetTabStrip`）供用户点击切换。
+
+### 基本概念
+
+- **隐式单表**：不调用任何工作表 API 时，控件内部只有一张名为 `Sheet1` 的工作表，所有旧 API 的行为完全不变。
+- **状态按表隔离**：每张表各自保存数据、格式（字体/前景色/对齐/边距/背景/边框）、列宽行高、合并区域、冻结行列、隐藏行列、自定义单元格、选区、滚动偏移等全部状态；切换工作表会完整恢复该表的状态，互不影响。
+- **撤销栈按表清空**：切换当前表时 Undo/Redo 栈被清空，撤销不会跨表回滚。
+- **公式引擎按表独立**：每张表有自己的引擎，依赖图与缓存互不污染；但宿主注册的自定义函数（`Spreadsheet.FormulaEngine.Functions`）是共享的，注册一次对所有表生效。
+- **坐标键统一为 `(column, row)`**，与单表 API 完全一致。
+
+### 快速示例
+
+```csharp
+// 第一张表（控件默认已创建）
+SpreadsheetSheet summary = SpreadsheetControl.CurrentSheet;
+SpreadsheetControl.RenameSheet(summary, "汇总");
+SpreadsheetControl.SetData(new Dictionary<(int, int), string>
+{
+    [(0, 0)] = "科目",
+    [(1, 0)] = "金额",
+});
+
+// 追加第二张表并填充：AddSheet 返回新表，并使其成为当前表
+SpreadsheetSheet detail = SpreadsheetControl.AddSheet("明细");
+SpreadsheetControl.SetData(detail, new Dictionary<(int, int), string>
+{
+    [(0, 0)] = "明细数据",
+});
+
+// 用代码切回第一张表（也支持双向绑定）
+SpreadsheetControl.CurrentSheetIndex = 0;
+```
+
+### 工作表管理 API
+
+| 方法                                       | 返回值                | 说明                                    |
+| ---------------------------------------- | ------------------ | ------------------------------------- |
+| `AddSheet(string name)`                  | `SpreadsheetSheet` | 在末尾追加工作表，并切换为当前表                      |
+| `InsertSheet(int index, string name)`    | `SpreadsheetSheet` | 在指定位置插入工作表                            |
+| `RemoveSheet(SpreadsheetSheet sheet)`    | `bool`             | 删除指定工作表；控件始终保留至少一张表                   |
+| `RemoveSheetAt(int index)`               | `bool`             | 删除指定位置的工作表                            |
+| `RenameSheet(SpreadsheetSheet, string)`  | `string`           | 重命名，返回实际使用的名称（重名自动追加序号，如 `Sheet1 (2)`）|
+| `MoveSheet(SpreadsheetSheet sheet, int)` | `bool`             | 把工作表移动到指定位置                           |
+| `IndexOfSheet(SpreadsheetSheet sheet)`   | `int`              | 查询工作表索引，不属于该控件时返回 `-1`                |
+| `MoveToNextSheet()` / `MoveToPreviousSheet()` | `void`        | 切到下一张 / 上一张表（对应 `Ctrl+PageDown/PageUp`）|
+| `RefreshSheetTabs()`                     | `void`             | 手动刷新页签栏（增删表后会自动刷新）                    |
+
+### 索引与隐藏工作表
+
+- `SpreadsheetSheet.Index` 是工作表在集合中的位置，**与导入源文件的顺序 1:1 对应（含隐藏表）**，可用于回查源文件中的工作表。
+- `SpreadsheetSheet.IsHidden` 标记隐藏表：隐藏表**保留索引**，默认不在页签栏显示；代码仍可通过 `CurrentSheetIndex` 切换到它。
+- `SpreadsheetSheet.Tag` 供宿主挂自定义数据（例如源文件工作表的原始索引）。
+- 页签栏开关 `SheetTabHiddenSheetsVisible = true` 时，隐藏表也会以灰显页签出现。
+
+```csharp
+SpreadsheetSheet hidden = SpreadsheetControl.AddSheet("原始数据");
+hidden.IsHidden = true;      // 页签不显示，索引仍然是 2
+
+SpreadsheetControl.CurrentSheetIndex = hidden.Index;   // 代码仍可切过去
+```
+
+### 页签栏开关与样式
+
+| 属性                             | 类型       | 默认值    | 说明                    |
+| ------------------------------ | -------- | ------ | --------------------- |
+| `SheetTabVisible`              | `bool`   | `true` | 是否显示页签栏                |
+| `SheetTabVisibleWhenSingle`    | `bool`   | `false`| 只有一张表时是否也显示页签栏         |
+| `SheetTabNewButtonVisible`     | `bool`   | `true` | 是否显示「+」新建按钮           |
+| `SheetTabHiddenSheetsVisible`  | `bool`   | `false`| 是否显示隐藏表的页签             |
+| `SheetTabAllowRename`          | `bool`   | `true` | 允许双击页签重命名             |
+| `SheetTabAllowDelete`          | `bool`   | `false`| 允许从页签删除工作表            |
+| `SheetTabAllowInsert`          | `bool`   | `true` | 允许从页签插入工作表            |
+| `SheetTabAllowReorder`         | `bool`   | `true` | 允许拖拽页签调整顺序            |
+| `SheetTabHeight`               | `double` | `28`   | 页签栏高度                 |
+| `SheetTabBackground`           | `IBrush` | `null` | 页签栏背景（`null` 跟随主题）     |
+| `SheetTabForeground`           | `IBrush` | `null` | 页签文字颜色                 |
+| `SheetTabSelectedBackground`   | `IBrush` | `null` | 选中页签背景                 |
+| `SheetTabBorderBrush`          | `IBrush` | `null` | 页签边框颜色                 |
+
+> 单表且 `SheetTabVisibleWhenSingle = false` 时页签栏高度为 0、不占位。
+
+### 每表交互开关
+
+| 属性                   | 类型                     | 默认值     | 说明                                        |
+| -------------------- | ---------------------- | ------- | ----------------------------------------- |
+| `IsReadOnly`         | `bool`                 | `false` | 整表只读：用户不能编辑、粘贴、清除该表单元格，**程序化写入不受限制**       |
+| `AllowDragMoveCells` | `bool`                 | `true`  | 是否允许拖拽选区边框移动内容                            |
+| `AllowTextOverflow`  | `bool`                 | `false` | 是否允许超宽文本溢出到右侧空单元格（类似 Excel）               |
+| `SelectionStyle`     | `SheetSelectionStyle`  | `Fill`  | 选区高亮样式：`Fill`（半透明填充）或 `FocusRect`（只画边框）    |
+
+```csharp
+SpreadsheetSheet imported = SpreadsheetControl.AddSheet("导入数据");
+imported.IsReadOnly = true;                              // 用户不可改
+imported.AllowDragMoveCells = false;                     // 不能被误拖动
+imported.AllowTextOverflow = true;                       // 长文本溢出显示
+imported.SelectionStyle = SheetSelectionStyle.FocusRect; // 只画选区边框
+
+SpreadsheetControl.SetData(imported, data);              // 宿主仍可程序化写入
+```
+
+### 指定工作表的 API 重载
+
+多数 API 都有带 `sheet` 参数的重载，可对**非当前表**直接操作，无需切换：
+
+```csharp
+SpreadsheetControl.SetData(sheet, data);                    // 写入指定表
+SpreadsheetControl.SetWidth(sheet, new Dictionary<int, double> { [0] = 120 });
+SpreadsheetControl.SetHeight(sheet, rowHeights);
+SpreadsheetControl.InsertColumns(sheet, 0, 1);              // 在指定表插入一列（如用于写校验错误列）
+SpreadsheetControl.DeleteColumns(sheet, 0, 1);
+```
+
+### 工作表事件
+
+| 事件                    | 参数类型                            | 触发时机               |
+| --------------------- | ------------------------------- | ------------------ |
+| `CurrentSheetChanged` | `CurrentSheetChangedEventArgs`  | 当前显示的工作表变化（点页签或代码赋值）|
+| `SheetInserted`       | `SheetEventArgs`                | 新增工作表              |
+| `SheetRemoved`        | `SheetEventArgs`                | 删除工作表              |
+| `SheetRenamed`        | `SheetRenamedEventArgs`         | 重命名（`OldName`/`NewName`）|
+| `SheetMoved`          | `SheetMovedEventArgs`           | 调整顺序（`OldIndex`/`NewIndex`）|
+
+```csharp
+SpreadsheetControl.CurrentSheetChanged += (sender, e) =>
+{
+    // e.OldSheet / e.NewSheet、e.OldIndex / e.NewIndex
+    Console.WriteLine($"切换到：{e.NewSheet?.Name}（索引 {e.NewIndex}）");
+};
+```
+
+---
+
+## Excel xlsx 导入与导出
+
+### 导出
+
+```csharp
+// 导出当前显示的工作表
+using (FileStream fs = File.Create("sheet.xlsx"))
+{
+    SpreadsheetControl.SaveXlsx(fs);
+}
+
+// 导出全部工作表（每张表一个 Excel 工作表，保留名称与可见性）
+using (FileStream fs = File.Create("book.xlsx"))
+{
+    SpreadsheetControl.SaveXlsx(fs, SpreadsheetControl.Sheets);
+}
+
+// 带导出选项
+var options = new XlsxExportOptions
+{
+    ExportFormulas = true,          // 默认 true：保留 Excel 兼容公式
+    ExportLinkAsHyperlink = false,  // 默认 false：链接单元格导出为纯文本
+    ExportHiddenRows = false,       // 默认 false：折叠行不导出
+    ExportHiddenColumns = false,    // 默认 false：隐藏列不导出
+};
+SpreadsheetControl.SaveXlsx("book.xlsx", SpreadsheetControl.Sheets, options);
+```
+
+### 导入
+
+```csharp
+// 从文件导入：每个 Excel 工作表对应一张 SpreadsheetSheet，顺序、名称、可见性一致
+IReadOnlyList<SpreadsheetSheet> sheets = SpreadsheetControl.LoadXlsx("book.xlsx");
+
+// 从流导入，并指定导入选项
+var importOptions = new XlsxImportOptions
+{
+    ImportHiddenSheets = true,      // 默认 true：隐藏工作表也导入（保留索引 1:1）
+    ImportFormulas = true,          // 默认 true：公式导入后由本表引擎重算
+    ImportStyles = true,            // 默认 true：字体/颜色/对齐/背景
+    ImportMergedRanges = true,      // 默认 true：合并区域
+    ImportColumnWidths = true,      // 默认 true：列宽
+    ImportRowHeights = true,        // 默认 true：行高
+    ImportHiddenRowsColumns = true, // 默认 true：隐藏行列
+    ClearExistingSheets = true,     // 默认 true：先清空现有工作表
+    MaxRowsPerSheet = 0,            // 0 = 不限制
+    MaxColumnsPerSheet = 0,         // 0 = 不限制
+};
+using (FileStream fs = File.OpenRead("book.xlsx"))
+{
+    SpreadsheetControl.LoadXlsx(fs, importOptions);
+}
+```
+
+导入后显示**第一张未隐藏**的工作表；`Sheet.Index` 与源文件中的工作表索引一一对应（隐藏表也占位），因此可以用 `Index` 回查源文件的对应表。
+
+### 典型流程：导入 → 切表 → 读当前表
+
+```csharp
+SpreadsheetControl.LoadXlsx(fileName);
+
+foreach (SpreadsheetSheet sheet in SpreadsheetControl.Sheets)
+{
+    Console.WriteLine($"{sheet.Index}: {sheet.Name}{(sheet.IsHidden ? "（隐藏）" : "")}，共 {sheet.Data.Count} 个单元格");
+}
+
+// 读当前表
+SpreadsheetSheet current = SpreadsheetControl.CurrentSheet;
+string a1 = current.Data.TryGetValue((0, 0), out string value) ? value : null;
+
+// 切到指定表并读取
+SpreadsheetControl.CurrentSheetIndex = 2;
+var rows = SpreadsheetControl.Sheets[2].Data;
+```
+
+---
+
 ## 事件
 
 ### CellSizeChanged
@@ -616,6 +832,18 @@ spreadsheet.ColorDoubleTapped += (sender, e) =>
 };
 ```
 
+### 工作表事件
+
+`CurrentSheetChanged`、`SheetInserted`、`SheetRemoved`、`SheetRenamed`、`SheetMoved` 详见[第 11 章「工作表事件」](#工作表事件)。
+
+```csharp
+SpreadsheetControl.SheetRemoved += (sender, e) =>
+{
+    // e.Sheet、e.Index
+    Console.WriteLine($"工作表被删除：{e.Sheet?.Name}");
+};
+```
+
 ---
 
 ## 键盘快捷键
@@ -638,6 +866,8 @@ spreadsheet.ColorDoubleTapped += (sender, e) =>
 | `Ctrl + Shift + V` / `Alt + Shift + Insert` | 粘贴（跳过空值）       |
 | `Ctrl + Z`                                  | 撤销             |
 | `Ctrl + Y`                                  | 重做             |
+| `Ctrl + PageDown`                           | 切换到下一张工作表      |
+| `Ctrl + PageUp`                             | 切换到上一张工作表      |
 
 ### 编辑模式
 
@@ -725,6 +955,18 @@ spreadsheet.ColorDoubleTapped += (sender, e) =>
 | `CellTextAlignment`        | `Dictionary<(int,int), TextAlignment>` | 空          | 读写  |
 | `CellVerticalAlignment`    | `Dictionary<(int,int), VerticalAlignment>` | 空      | 读写  |
 | `CellMargin`               | `Dictionary<(int,int), Thickness>` | 空             | 读写  |
+| `Sheets`                   | `IReadOnlyList<SpreadsheetSheet>` | 1 张 `Sheet1` | 只读  |
+| `CurrentSheet`             | `SpreadsheetSheet`     | -                | 只读  |
+| `CurrentSheetIndex`        | `int`                   | `0`              | 读写（支持双向绑定） |
+| `SheetTabVisible`          | `bool`                  | `true`           | 读写  |
+| `SheetTabVisibleWhenSingle`| `bool`                  | `false`          | 读写  |
+| `SheetTabNewButtonVisible` | `bool`                  | `true`           | 读写  |
+| `SheetTabHiddenSheetsVisible` | `bool`               | `false`          | 读写  |
+| `SheetTabAllowRename`      | `bool`                  | `true`           | 读写  |
+| `SheetTabAllowDelete`      | `bool`                  | `false`          | 读写  |
+| `SheetTabAllowInsert`      | `bool`                  | `true`           | 读写  |
+| `SheetTabAllowReorder`     | `bool`                  | `true`           | 读写  |
+| `SheetTabHeight`           | `double`                | `28`             | 读写  |
 
 ### 方法
 
@@ -772,6 +1014,23 @@ spreadsheet.ColorDoubleTapped += (sender, e) =>
 | `Refresh()`                                   | `void`                               | 修改样式字典后强制重绘     |
 | `LoadRgf(stream)`                             | `void`                               | 加载 RGF 报表文档      |
 | `SplitData(text, ...)`                        | `static string[][]`                  | 静态方法，分割文本为二维数组 |
+| `AddSheet(name)`                              | `SpreadsheetSheet`                   | 追加工作表并切换为当前表   |
+| `InsertSheet(index, name)`                    | `SpreadsheetSheet`                   | 在指定位置插入工作表     |
+| `RemoveSheet(sheet)`                          | `bool`                               | 删除指定工作表         |
+| `RemoveSheetAt(index)`                        | `bool`                               | 删除指定位置的工作表      |
+| `RenameSheet(sheet, name)`                    | `string`                             | 重命名工作表，返回实际名称   |
+| `MoveSheet(sheet, index)`                     | `bool`                               | 移动工作表到指定位置      |
+| `IndexOfSheet(sheet)`                         | `int`                                | 查询工作表索引         |
+| `MoveToNextSheet()` / `MoveToPreviousSheet()` | `void`                               | 切换到下一张/上一张表     |
+| `RefreshSheetTabs()`                          | `void`                               | 刷新页签栏           |
+| `SetData(sheet, data)`                        | `void`                               | 写入指定工作表         |
+| `SetWidth(sheet, widths)`                     | `void`                               | 设置指定工作表的列宽      |
+| `SetHeight(sheet, heights)`                   | `void`                               | 设置指定工作表的行高      |
+| `InsertColumns(sheet, index, count)`          | `void`                               | 在指定工作表插入列       |
+| `DeleteColumns(sheet, index, count)`          | `void`                               | 在指定工作表删除列       |
+| `SaveXlsx(stream / fileName, options)`        | `void`                               | 导出当前工作表到 xlsx   |
+| `SaveXlsx(stream / fileName, sheets, options)`| `void`                               | 导出多张工作表到 xlsx   |
+| `LoadXlsx(stream / fileName, options)`        | `IReadOnlyList<SpreadsheetSheet>`    | 导入 xlsx 工作簿      |
 
 ### 事件
 
@@ -779,3 +1038,8 @@ spreadsheet.ColorDoubleTapped += (sender, e) =>
 | ------------------- | ---------------------------- | ------- |
 | `CellSizeChanged`   | `CellSizeChangedEventArgs`   | 单元格尺寸变化 |
 | `ColorDoubleTapped` | `ColorDoubleTappedEventArgs` | 双击颜色预览  |
+| `CurrentSheetChanged` | `CurrentSheetChangedEventArgs` | 当前工作表变化 |
+| `SheetInserted`     | `SheetEventArgs`             | 新增工作表   |
+| `SheetRemoved`      | `SheetEventArgs`             | 删除工作表   |
+| `SheetRenamed`      | `SheetRenamedEventArgs`      | 工作表重命名  |
+| `SheetMoved`        | `SheetMovedEventArgs`        | 工作表顺序调整 |

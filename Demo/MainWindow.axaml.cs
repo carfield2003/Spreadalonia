@@ -1,5 +1,6 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Markup.Xaml;
 using Avalonia.Media;
@@ -349,6 +350,474 @@ namespace Demo
             // Automated screenshot test for the frozen rows / columns demo: shoots the sheet at the
             // top-left corner, after scrolling to the bottom-right corner (the frozen header row and
             // the 月 / 日 columns have to stay in place), and with a single axis frozen.
+            if (Environment.GetCommandLineArgs().Any(a => a == "--sheet-state-test"))
+            {
+                Opened += async (_, _) =>
+                {
+                    try
+                    {
+                        await System.Threading.Tasks.Task.Delay(500);
+
+                        SpreadsheetControl.MergedRanges = null;
+                        SpreadsheetControl.CellBackgrounds = null;
+                        SpreadsheetControl.CellBorders = null;
+                        SpreadsheetControl.MaxTableWidth = 6;
+                        SpreadsheetControl.MaxTableHeight = 20;
+                        SpreadsheetControl.ClearContent();
+                        SpreadsheetControl.UnfreezePanes();
+                        SpreadsheetControl.ShowAllRows();
+                        SpreadsheetControl.ShowAllColumns();
+
+                        // --- Worksheet A: the implicit first worksheet ---
+                        SpreadsheetControl.SetData(new Dictionary<(int, int), string>
+                        {
+                            [(0, 0)] = "A-00", [(1, 0)] = "A-01",
+                            [(0, 1)] = "A-10", [(1, 4)] = "A-14",
+                        });
+                        SpreadsheetControl.SetWidth(new Dictionary<int, double> { [0] = 200, [1] = 120 });
+                        SpreadsheetControl.FreezePanes(2, 0);
+                        SpreadsheetControl.HideColumn(2);
+                        SpreadsheetControl.MergedRanges = System.Collections.Immutable.ImmutableList.Create(new SelectionRange(0, 0, 2, 0));
+                        SpreadsheetControl.Selection = System.Collections.Immutable.ImmutableList.Create(new SelectionRange(1, 4));
+
+                        Console.WriteLine($"[SheetState] sheets={SpreadsheetControl.Sheets.Count} current='{SpreadsheetControl.CurrentSheet?.Name}' index={SpreadsheetControl.CurrentSheetIndex}");
+
+                        // --- Worksheet B ---
+                        SpreadsheetSheet sheetB = SpreadsheetControl.AddSheet("B");
+                        Console.WriteLine($"[SheetState] added '{sheetB.Name}' at {sheetB.Index}; sheets={SpreadsheetControl.Sheets.Count}");
+
+                        SpreadsheetControl.CurrentSheetIndex = 1;
+                        await System.Threading.Tasks.Task.Delay(100);
+
+                        SpreadsheetControl.SetData(new Dictionary<(int, int), string>
+                        {
+                            [(0, 0)] = "B-00", [(1, 1)] = "B-11",
+                        });
+                        SpreadsheetControl.SetWidth(new Dictionary<int, double> { [0] = 80 });
+                        SpreadsheetControl.Selection = System.Collections.Immutable.ImmutableList.Create(new SelectionRange(3, 6));
+
+                        double bWidth = SpreadsheetControl.GetCellSize(0, 0).width;
+                        bool bOk = bWidth == 80
+                            && SpreadsheetControl.FrozenRowCount == 0
+                            && SpreadsheetControl.HiddenColumns.Count == 0
+                            && SpreadsheetControl.MergedRanges.Count == 0
+                            && SpreadsheetControl.Data[(0, 0)] == "B-00";
+                        Console.WriteLine($"[SheetState] B isolated: width={bWidth} frozen={SpreadsheetControl.FrozenRowCount} hiddenCols={SpreadsheetControl.HiddenColumns.Count} merged={SpreadsheetControl.MergedRanges.Count} A1='{SpreadsheetControl.Data[(0, 0)]}' -> {(bOk ? "PASS" : "FAIL")}");
+
+                        // --- Back to worksheet A: everything has to be restored ---
+                        SpreadsheetControl.CurrentSheetIndex = 0;
+                        await System.Threading.Tasks.Task.Delay(100);
+
+                        double aWidth = SpreadsheetControl.GetCellSize(0, 0).width;
+                        bool aOk = aWidth == 200
+                            && SpreadsheetControl.FrozenRowCount == 2
+                            && SpreadsheetControl.HiddenColumns.Contains(2)
+                            && SpreadsheetControl.MergedRanges.Count == 1
+                            && SpreadsheetControl.Selection.Count == 1 && SpreadsheetControl.Selection[0].Left == 1 && SpreadsheetControl.Selection[0].Top == 4
+                            && SpreadsheetControl.Data[(0, 0)] == "A-00"
+                            && SpreadsheetControl.Data[(1, 4)] == "A-14";
+                        Console.WriteLine($"[SheetState] A restored: width={aWidth} frozen={SpreadsheetControl.FrozenRowCount} hiddenCols=[{string.Join(",", SpreadsheetControl.HiddenColumns)}] merged={SpreadsheetControl.MergedRanges.Count} selection={SpreadsheetControl.Selection[0].Left},{SpreadsheetControl.Selection[0].Top} A1='{SpreadsheetControl.Data[(0, 0)]}' B5='{SpreadsheetControl.Data[(1, 4)]}' -> {(aOk ? "PASS" : "FAIL")}");
+
+                        SpreadsheetControl.CurrentSheetIndex = 1;
+                        await System.Threading.Tasks.Task.Delay(100);
+                        bool bStillOk = SpreadsheetControl.Data[(0, 0)] == "B-00" && SpreadsheetControl.Data[(1, 1)] == "B-11";
+                        Console.WriteLine($"[SheetState] B intact after switching back -> {(bStillOk ? "PASS" : "FAIL")}");
+
+                        Console.WriteLine($"[SheetState] RESULT {(aOk && bOk && bStillOk ? "PASS" : "FAIL")}");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[SheetState] EXCEPTION {ex}");
+                    }
+                    finally
+                    {
+                        Environment.Exit(0);
+                    }
+                };
+            }
+
+            // Automated test for the sheet tab strip: visibility (single sheet is hidden by default
+            // and shown after a second sheet is added), click switching, hidden sheets and the
+            // rename / delete / move API.
+            if (Environment.GetCommandLineArgs().Any(a => a == "--sheet-tab-test"))
+            {
+                Opened += async (_, _) =>
+                {
+                    try
+                    {
+                        await System.Threading.Tasks.Task.Delay(500);
+
+                        SpreadsheetControl.MergedRanges = null;
+                        SpreadsheetControl.CellBackgrounds = null;
+                        SpreadsheetControl.CellBorders = null;
+                        SpreadsheetControl.MaxTableWidth = 6;
+                        SpreadsheetControl.MaxTableHeight = 20;
+                        SpreadsheetControl.ClearContent();
+                        SpreadsheetControl.UnfreezePanes();
+                        SpreadsheetControl.ShowAllRows();
+                        SpreadsheetControl.ShowAllColumns();
+
+                        // 1) Single sheet by default: the strip must be hidden and take no space.
+                        SpreadsheetSheet original = SpreadsheetControl.Sheets[0];
+                        bool singleHidden = !SpreadsheetControl.SheetTabStripControlInternal.IsVisible
+                            && SpreadsheetControl.SheetTabStripControlInternal.TabButtons.Count == 0
+                            && SpreadsheetControl.Sheets.Count == 1;
+                        Console.WriteLine($"[SheetTab] single-sheet hidden: visible={SpreadsheetControl.SheetTabStripControlInternal.IsVisible} tabs={SpreadsheetControl.SheetTabStripControlInternal.TabButtons.Count} -> {(singleHidden ? "PASS" : "FAIL")}");
+
+                        // 2) Add a second sheet: the strip must show two tabs and the new sheet must
+                        // not become the current one.
+                        SpreadsheetControl.AddSheet("B");
+                        SpreadsheetControl.AddSheet("C");
+                        bool visibleOk = SpreadsheetControl.SheetTabStripControlInternal.IsVisible
+                            && SpreadsheetControl.SheetTabStripControlInternal.TabButtons.Count == 3
+                            && SpreadsheetControl.CurrentSheet == original;
+                        Console.WriteLine($"[SheetTab] 3-sheet visible: visible={SpreadsheetControl.SheetTabStripControlInternal.IsVisible} tabs={SpreadsheetControl.SheetTabStripControlInternal.TabButtons.Count} current='{SpreadsheetControl.CurrentSheet.Name}' -> {(visibleOk ? "PASS" : "FAIL")}");
+
+                        // 3) Click the second tab to switch to "B" -> the tab selection must follow.
+                        SpreadsheetControl.SheetTabStripControlInternal.TabButtons[1].RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Avalonia.Controls.Button.ClickEvent));
+                        await System.Threading.Tasks.Task.Delay(100);
+                        bool clickOk = SpreadsheetControl.CurrentSheetIndex == 1
+                            && SpreadsheetControl.CurrentSheet.Name == "B";
+                        Console.WriteLine($"[SheetTab] click switches: index={SpreadsheetControl.CurrentSheetIndex} name='{SpreadsheetControl.CurrentSheet.Name}' -> {(clickOk ? "PASS" : "FAIL")}");
+
+                        // 4) Ctrl+PageDown goes to "C" and wraps back to the first sheet.
+                        SpreadsheetControl.MoveToNextSheet();
+                        await System.Threading.Tasks.Task.Delay(100);
+                        bool pageDownOk = SpreadsheetControl.CurrentSheetIndex == 2;
+                        Console.WriteLine($"[SheetTab] Ctrl+PageDown: index={SpreadsheetControl.CurrentSheetIndex} -> {(pageDownOk ? "PASS" : "FAIL")}");
+
+                        SpreadsheetControl.MoveToNextSheet();
+                        await System.Threading.Tasks.Task.Delay(100);
+                        bool wrapOk = SpreadsheetControl.CurrentSheetIndex == 0;
+                        Console.WriteLine($"[SheetTab] Ctrl+PageDown wraps: index={SpreadsheetControl.CurrentSheetIndex} -> {(wrapOk ? "PASS" : "FAIL")}");
+
+                        // 5) Hidden sheets are not shown unless asked for, but the current one
+                        // always is.
+                        SpreadsheetSheet b = SpreadsheetControl.Sheets[1];
+                        b.IsHidden = true;
+                        SpreadsheetControl.RefreshSheetTabs();
+                        bool hiddenOk = SpreadsheetControl.SheetTabStripControlInternal.TabButtons.Count == 2
+                            && !SpreadsheetControl.SheetTabStripControlInternal.TabSheets.Contains(b);
+                        Console.WriteLine($"[SheetTab] hidden by default: tabs={SpreadsheetControl.SheetTabStripControlInternal.TabButtons.Count} hasHidden={SpreadsheetControl.SheetTabStripControlInternal.TabSheets.Contains(b)} -> {(hiddenOk ? "PASS" : "FAIL")}");
+
+                        // Jumping to a hidden worksheet in code still gives it a tab, so that the
+                        // user can always find the way back to the sheet that is being displayed.
+                        SpreadsheetControl.CurrentSheetIndex = 1;
+                        await System.Threading.Tasks.Task.Delay(100);
+                        bool hiddenCurrentOk = SpreadsheetControl.CurrentSheet == b
+                            && SpreadsheetControl.SheetTabStripControlInternal.TabSheets.Contains(b);
+                        Console.WriteLine($"[SheetTab] hidden current keeps a tab: current='{SpreadsheetControl.CurrentSheet?.Name}' tabs={SpreadsheetControl.SheetTabStripControlInternal.TabButtons.Count} -> {(hiddenCurrentOk ? "PASS" : "FAIL")}");
+
+                        SpreadsheetControl.SheetTabHiddenSheetsVisible = true;
+                        bool hiddenShownOk = SpreadsheetControl.SheetTabStripControlInternal.TabButtons.Count == 3;
+                        Console.WriteLine($"[SheetTab] hidden shown when asked: tabs={SpreadsheetControl.SheetTabStripControlInternal.TabButtons.Count} -> {(hiddenShownOk ? "PASS" : "FAIL")}");
+
+                        b.IsHidden = false;
+                        SpreadsheetControl.SheetTabHiddenSheetsVisible = false;
+                        SpreadsheetControl.CurrentSheetIndex = 0;
+                        SpreadsheetControl.RefreshSheetTabs();
+                        await System.Threading.Tasks.Task.Delay(100);
+
+                        // 6) Rename / delete / move from the API.
+                        string newName = SpreadsheetControl.RenameSheet(SpreadsheetControl.Sheets[2], "Budget");
+                        string tabText = (SpreadsheetControl.SheetTabStripControlInternal.TabButtons[2].Content as TextBlock)?.Text;
+                        bool renameOk = newName == "Budget" && SpreadsheetControl.Sheets[2].Name == "Budget" && tabText == "Budget";
+                        Console.WriteLine($"[SheetTab] rename: name='{newName}' tab='{tabText}' -> {(renameOk ? "PASS" : "FAIL")}");
+
+                        bool movedOk = SpreadsheetControl.MoveSheet(SpreadsheetControl.Sheets[2], 0)
+                            && SpreadsheetControl.Sheets[0].Name == "Budget"
+                            && SpreadsheetControl.CurrentSheet == original
+                            && SpreadsheetControl.CurrentSheetIndex == SpreadsheetControl.IndexOfSheet(original);
+                        Console.WriteLine($"[SheetTab] move: sheets[0]='{SpreadsheetControl.Sheets[0].Name}' current='{SpreadsheetControl.CurrentSheet?.Name}' index={SpreadsheetControl.CurrentSheetIndex} -> {(movedOk ? "PASS" : "FAIL")}");
+
+                        SpreadsheetControl.SheetTabAllowDelete = true;
+                        bool removedOk = SpreadsheetControl.RemoveSheet(SpreadsheetControl.Sheets[0]) && SpreadsheetControl.Sheets.Count == 2;
+                        bool secondRemoved = SpreadsheetControl.RemoveSheet(SpreadsheetControl.Sheets[0]) && SpreadsheetControl.Sheets.Count == 1;
+                        bool lastKept = !SpreadsheetControl.RemoveSheet(SpreadsheetControl.Sheets[0]) && SpreadsheetControl.Sheets.Count == 1
+                            && !SpreadsheetControl.SheetTabStripControlInternal.IsVisible;
+                        Console.WriteLine($"[SheetTab] delete: first={removedOk} second={secondRemoved} lastKept={lastKept} count={SpreadsheetControl.Sheets.Count} visible={SpreadsheetControl.SheetTabStripControlInternal.IsVisible} -> {(removedOk && secondRemoved && lastKept ? "PASS" : "FAIL")}");
+
+                        bool resultOk = singleHidden && visibleOk && clickOk && pageDownOk && wrapOk && hiddenOk && hiddenCurrentOk && hiddenShownOk && renameOk && movedOk && removedOk && secondRemoved && lastKept;
+                        Console.WriteLine($"[SheetTab] RESULT {(resultOk ? "PASS" : "FAIL")}");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[SheetTab] EXCEPTION {ex}");
+                    }
+                    finally
+                    {
+                        Environment.Exit(0);
+                    }
+                };
+            }
+
+            // Automated test for the sheet-specific API: writing to, sizing and re-shaping a
+            // worksheet that is NOT the one being displayed.
+            if (Environment.GetCommandLineArgs().Any(a => a == "--sheet-api-test"))
+            {
+                Opened += async (_, _) =>
+                {
+                    try
+                    {
+                        await System.Threading.Tasks.Task.Delay(500);
+
+                        SpreadsheetControl.MergedRanges = null;
+                        SpreadsheetControl.CellBackgrounds = null;
+                        SpreadsheetControl.CellBorders = null;
+                        SpreadsheetControl.MaxTableWidth = 8;
+                        SpreadsheetControl.MaxTableHeight = 20;
+                        SpreadsheetControl.ClearContent();
+                        SpreadsheetControl.UnfreezePanes();
+                        SpreadsheetControl.ShowAllRows();
+                        SpreadsheetControl.ShowAllColumns();
+
+                        SpreadsheetSheet a = SpreadsheetControl.CurrentSheet;
+                        SpreadsheetSheet b = SpreadsheetControl.AddSheet("Second");
+
+                        // 1) Write into a worksheet that is not being displayed.
+                        SpreadsheetControl.SetData(b, new Dictionary<(int, int), string>
+                        {
+                            [(0, 0)] = "B-00", [(1, 0)] = "B-10", [(0, 1)] = "=1+2"
+                        });
+                        SpreadsheetControl.SetWidth(b, new Dictionary<int, double> { [0] = 111 });
+
+                        bool isolated = SpreadsheetControl.CurrentSheet == a
+                            && a.Data.Count == 0
+                            && b.Data.Count == 3;
+                        Console.WriteLine($"[SheetApi] write to non-current: current='{SpreadsheetControl.CurrentSheet?.Name}' aData={a.Data.Count} bData={b.Data.Count} -> {(isolated ? "PASS" : "FAIL")}");
+
+                        // 2) Switching to it shows exactly what was written, formula included.
+                        SpreadsheetControl.CurrentSheetIndex = 1;
+                        await System.Threading.Tasks.Task.Delay(100);
+                        object formulaValue = b.FormulaCells.TryGetValue((0, 1), out Spreadalonia.Formula.CellData fc) ? fc.CachedValue : null;
+                        bool shown = SpreadsheetControl.Data[(0, 0)] == "B-00" && SpreadsheetControl.Data[(1, 0)] == "B-10"
+                            && Math.Abs(SpreadsheetControl.GetCellSize(0, 0).width - 111) < 0.01
+                            && formulaValue != null && Convert.ToDouble(formulaValue) == 3;
+                        Console.WriteLine($"[SheetApi] non-current becomes visible: A1='{SpreadsheetControl.Data[(0, 0)]}' B1='{SpreadsheetControl.Data[(1, 0)]}' width={SpreadsheetControl.GetCellSize(0, 0).width} formula={formulaValue} -> {(shown ? "PASS" : "FAIL")}");
+
+                        // 3) InsertColumns / DeleteColumns on a sheet that is not being displayed.
+                        SpreadsheetControl.CurrentSheetIndex = 0;
+                        await System.Threading.Tasks.Task.Delay(100);
+
+                        SpreadsheetControl.InsertColumns(b, 0, 1);
+                        object movedFormula = b.FormulaCells.TryGetValue((1, 1), out Spreadalonia.Formula.CellData fc2) ? fc2.CachedValue : null;
+                        bool inserted = !b.Data.ContainsKey((0, 0)) && !b.Data.ContainsKey((0, 1))
+                            && b.Data[(1, 0)] == "B-00" && b.Data[(2, 0)] == "B-10" && b.Data[(1, 1)] == "=1+2"
+                            && b.ColumnWidths.TryGetValue(1, out double w) && w == 111
+                            && movedFormula != null && Convert.ToDouble(movedFormula) == 3;
+                        Console.WriteLine($"[SheetApi] insert column on non-current: B1='{(b.Data.ContainsKey((1, 0)) ? b.Data[(1, 0)] : "<none>")}' width1={(b.ColumnWidths.TryGetValue(1, out double w2) ? w2 : -1)} formula={movedFormula} -> {(inserted ? "PASS" : "FAIL")}");
+
+                        SpreadsheetControl.DeleteColumns(b, 0, 1);
+                        bool deleted = b.Data[(0, 0)] == "B-00" && b.Data[(1, 0)] == "B-10" && b.Data[(0, 1)] == "=1+2"
+                            && b.ColumnWidths.TryGetValue(0, out double w3) && w3 == 111;
+                        Console.WriteLine($"[SheetApi] delete column on non-current: A1='{(b.Data.ContainsKey((0, 0)) ? b.Data[(0, 0)] : "<none>")}' B1='{(b.Data.ContainsKey((1, 0)) ? b.Data[(1, 0)] : "<none>")}' width0={(b.ColumnWidths.TryGetValue(0, out double w4) ? w4 : -1)} -> {(deleted ? "PASS" : "FAIL")}");
+
+                        Console.WriteLine($"[SheetApi] RESULT {(isolated && shown && inserted && deleted ? "PASS" : "FAIL")}");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[SheetApi] EXCEPTION {ex}");
+                    }
+                    finally
+                    {
+                        Environment.Exit(0);
+                    }
+                };
+            }
+
+            // Automated test for the xlsx round trip: a workbook with three worksheets (the last one
+            // hidden) is written, read back and written again; the worksheets must match the ones
+            // that were exported, index by index.
+            if (Environment.GetCommandLineArgs().Any(a => a == "--sheet-xlsx-test"))
+            {
+                Opened += async (_, _) =>
+                {
+                    string path = Path.Combine(Path.GetTempPath(), "spreadalonia_sheet_xlsx_test.xlsx");
+
+                    try
+                    {
+                        await System.Threading.Tasks.Task.Delay(500);
+
+                        SpreadsheetControl.MergedRanges = null;
+                        SpreadsheetControl.CellBackgrounds = null;
+                        SpreadsheetControl.CellBorders = null;
+                        SpreadsheetControl.ClearContent();
+
+                        SpreadsheetSheet alpha = SpreadsheetControl.CurrentSheet;
+                        SpreadsheetControl.RenameSheet(alpha, "Alpha");
+                        SpreadsheetControl.SetData(alpha, new Dictionary<(int, int), string>
+                        {
+                            [(0, 0)] = "Alpha-00",
+                            [(1, 0)] = "=1+2",
+                            [(0, 1)] = "Alpha-01"
+                        });
+
+                        SpreadsheetSheet beta = SpreadsheetControl.AddSheet("Beta");
+                        SpreadsheetControl.SetData(beta, new Dictionary<(int, int), string>
+                        {
+                            [(0, 0)] = "Beta-00",
+                            [(0, 1)] = "Beta-01"
+                        });
+                        SpreadsheetControl.SetWidth(beta, new Dictionary<int, double> { [0] = 120 });
+
+                        SpreadsheetSheet gamma = SpreadsheetControl.AddSheet("Gamma");
+                        gamma.IsHidden = true;
+                        SpreadsheetControl.SetData(gamma, new Dictionary<(int, int), string> { [(0, 0)] = "Gamma-00" });
+
+                        using (FileStream output = File.Create(path))
+                        {
+                            SpreadsheetControl.SaveXlsx(output, SpreadsheetControl.Sheets);
+                        }
+
+                        // 1) One worksheet per worksheet of the workbook, same order, name, visibility
+                        //    and index (the hidden one included).
+                        IReadOnlyList<SpreadsheetSheet> loaded = SpreadsheetControl.LoadXlsx(path);
+
+                        bool namesOk = loaded.Count == 3
+                            && loaded[0].Name == "Alpha" && loaded[1].Name == "Beta" && loaded[2].Name == "Gamma"
+                            && loaded[0].Index == 0 && loaded[2].Index == 2
+                            && !loaded[0].IsHidden && !loaded[1].IsHidden && loaded[2].IsHidden;
+                        Console.WriteLine($"[SheetXlsx] names: [{string.Join(", ", loaded.Select(s => s.Name + (s.IsHidden ? "(hidden)" : "")))}] -> {(namesOk ? "PASS" : "FAIL")}");
+
+                        // 2) The first worksheet that is not hidden is the one being displayed.
+                        bool currentOk = SpreadsheetControl.CurrentSheet == loaded[0] && SpreadsheetControl.CurrentSheetIndex == 0;
+                        Console.WriteLine($"[SheetXlsx] current: '{SpreadsheetControl.CurrentSheet?.Name}' index={SpreadsheetControl.CurrentSheetIndex} -> {(currentOk ? "PASS" : "FAIL")}");
+
+                        // 3) The content of every worksheet, formulas included, is evaluated again.
+                        double formulaValue = loaded[0].FormulaCells.TryGetValue((1, 0), out Spreadalonia.Formula.CellData formula) ? Convert.ToDouble(formula.CachedValue) : -1;
+                        bool dataOk = loaded[0].Data[(0, 0)] == "Alpha-00" && loaded[0].Data[(0, 1)] == "Alpha-01"
+                            && loaded[1].Data[(0, 0)] == "Beta-00" && loaded[1].Data[(0, 1)] == "Beta-01"
+                            && loaded[2].Data[(0, 0)] == "Gamma-00"
+                            && formulaValue == 3;
+                        Console.WriteLine($"[SheetXlsx] data: A1='{loaded[0].Data[(0, 0)]}' formula={formulaValue} beta='{loaded[1].Data[(0, 1)]}' gamma='{loaded[2].Data[(0, 0)]}' -> {(dataOk ? "PASS" : "FAIL")}");
+
+                        // 4) The geometry survives the round trip (DIP -> Excel characters -> DIP).
+                        bool widthOk = loaded[1].ColumnWidths.TryGetValue(0, out double width) && Math.Abs(width - 120) <= 7.5;
+                        Console.WriteLine($"[SheetXlsx] column width: {width} (was 120) -> {(widthOk ? "PASS" : "FAIL")}");
+
+                        // 5) The imported workbook can be exported and read back again.
+                        bool roundTripOk;
+                        using (MemoryStream again = new MemoryStream())
+                        {
+                            SpreadsheetControl.SaveXlsx(again, SpreadsheetControl.Sheets);
+                            again.Position = 0;
+
+                            IReadOnlyList<SpreadsheetSheet> reloaded = SpreadsheetControl.LoadXlsx(again);
+                            roundTripOk = reloaded.Count == 3 && reloaded[2].IsHidden
+                                && reloaded[0].Name == "Alpha" && reloaded[2].Name == "Gamma"
+                                && reloaded[1].Data.ContainsKey((0, 1)) && reloaded[1].Data[(0, 1)] == "Beta-01";
+                            Console.WriteLine($"[SheetXlsx] re-export: [{string.Join(", ", reloaded.Select(s => s.Name))}] -> {(roundTripOk ? "PASS" : "FAIL")}");
+                        }
+
+                        Console.WriteLine($"[SheetXlsx] RESULT {(namesOk && currentOk && dataOk && widthOk && roundTripOk ? "PASS" : "FAIL")}");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[SheetXlsx] EXCEPTION {ex}");
+                    }
+                    finally
+                    {
+                        try { File.Delete(path); } catch { }
+
+                        Environment.Exit(0);
+                    }
+                };
+            }
+
+            // Automated test for the per-worksheet display / interaction options: read-only, text
+            // overflow, dragging cells and the style of the selection frame. Each option belongs to
+            // one worksheet only.
+            if (Environment.GetCommandLineArgs().Any(a => a == "--sheet-options-test"))
+            {
+                Opened += async (_, _) =>
+                {
+                    try
+                    {
+                        await System.Threading.Tasks.Task.Delay(500);
+
+                        SpreadsheetControl.MergedRanges = null;
+                        SpreadsheetControl.CellBackgrounds = null;
+                        SpreadsheetControl.CellBorders = null;
+                        SpreadsheetControl.ClearContent();
+                        SpreadsheetControl.MaxTableWidth = 6;
+                        SpreadsheetControl.MaxTableHeight = 10;
+
+                        string longText = "A text far too long for the column it lives in";
+
+                        SpreadsheetSheet locked = SpreadsheetControl.CurrentSheet;
+                        SpreadsheetControl.RenameSheet(locked, "Locked");
+                        SpreadsheetControl.SetData(locked, new Dictionary<(int, int), string>
+                        {
+                            [(0, 0)] = longText,
+                            [(0, 1)] = "Second row"
+                        });
+                        locked.IsReadOnly = true;
+                        locked.AllowDragMoveCells = false;
+                        locked.AllowTextOverflow = true;
+                        locked.SelectionStyle = SheetSelectionStyle.FocusRect;
+
+                        SpreadsheetSheet free = SpreadsheetControl.AddSheet("Free");
+                        SpreadsheetControl.SetData(free, new Dictionary<(int, int), string>
+                        {
+                            [(0, 0)] = longText,
+                            [(0, 1)] = "Second row"
+                        });
+                        free.IsReadOnly = false;
+                        free.AllowDragMoveCells = true;
+                        free.AllowTextOverflow = false;
+                        free.SelectionStyle = SheetSelectionStyle.Fill;
+
+                        // 1) A read-only worksheet protects every one of its cells; the other one
+                        //    stays editable. The option follows the worksheet that is displayed.
+                        SpreadsheetControl.CurrentSheetIndex = 0;
+                        await System.Threading.Tasks.Task.Delay(100);
+                        bool lockedReadonly = SpreadsheetControl.IsCellReadonly(0, 0);
+
+                        SpreadsheetControl.CurrentSheetIndex = 1;
+                        await System.Threading.Tasks.Task.Delay(100);
+                        bool freeReadonly = SpreadsheetControl.IsCellReadonly(0, 0);
+
+                        bool readOnlyOk = lockedReadonly && !freeReadonly;
+                        Console.WriteLine($"[SheetOptions] read-only: locked={lockedReadonly} free={freeReadonly} -> {(readOnlyOk ? "PASS" : "FAIL")}");
+
+                        // 2) A read-only worksheet can still be written programmatically.
+                        SpreadsheetControl.SetData(locked, new Dictionary<(int, int), string> { [(1, 3)] = "written by the host" });
+                        bool programmaticOk = locked.Data[(1, 3)] == "written by the host" && locked.IsReadOnly;
+                        Console.WriteLine($"[SheetOptions] programmatic write into a read-only sheet: '{locked.Data[(1, 3)]}' -> {(programmaticOk ? "PASS" : "FAIL")}");
+
+                        // 3) The options of one worksheet never leak into another one.
+                        bool isolated = locked.AllowDragMoveCells != free.AllowDragMoveCells
+                            && locked.AllowTextOverflow != free.AllowTextOverflow
+                            && locked.SelectionStyle != free.SelectionStyle
+                            && free.AllowDragMoveCells && !free.AllowTextOverflow && free.SelectionStyle == SheetSelectionStyle.Fill;
+                        Console.WriteLine($"[SheetOptions] isolation: locked[drag={locked.AllowDragMoveCells}, overflow={locked.AllowTextOverflow}, style={locked.SelectionStyle}] free[drag={free.AllowDragMoveCells}, overflow={free.AllowTextOverflow}, style={free.SelectionStyle}] -> {(isolated ? "PASS" : "FAIL")}");
+
+                        // 4) Screenshots: the overflowing text and the focus rectangle on the first
+                        //    worksheet, the clipped text and the filled selection on the second one.
+                        SpreadsheetControl.CurrentSheetIndex = 0;
+                        SpreadsheetControl.Selection = ImmutableList.Create(new SelectionRange(0, 0));
+                        await System.Threading.Tasks.Task.Delay(600);
+                        SaveScreenshot(@"C:\Users\89664\Desktop\sheet_options_locked.png");
+
+                        SpreadsheetControl.CurrentSheetIndex = 1;
+                        SpreadsheetControl.Selection = ImmutableList.Create(new SelectionRange(0, 0));
+                        await System.Threading.Tasks.Task.Delay(600);
+                        SaveScreenshot(@"C:\Users\89664\Desktop\sheet_options_free.png");
+                        Console.WriteLine("[SheetOptions] screenshots saved.");
+
+                        Console.WriteLine($"[SheetOptions] RESULT {(readOnlyOk && programmaticOk && isolated ? "PASS" : "FAIL")}");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[SheetOptions] EXCEPTION {ex}");
+                    }
+                    finally
+                    {
+                        Environment.Exit(0);
+                    }
+                };
+            }
+
             if (Environment.GetCommandLineArgs().Any(a => a == "--freeze-panes-test"))
             {
                 Opened += async (_, _) =>
@@ -2134,6 +2603,75 @@ namespace Demo
 
             Console.WriteLine("[FreezePanes] Sheet built: FrozenRowCount = 1, FrozenColumnCount = 2.");
         }
+
+        private void MultiSheetButton_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+        {
+            try
+            {
+                if (!this.multiSheetDemoWired)
+                {
+                    // Whenever the user picks another sheet tab, the title bar shows the worksheet
+                    // that is being displayed now (switching sheets) together with the content of its
+                    // first cell (reading the current sheet).
+                    SpreadsheetControl.CurrentSheetChanged += (_, args) =>
+                    {
+                        string firstCell = args.NewSheet != null && args.NewSheet.Data.TryGetValue((0, 0), out string value) ? value : "(empty)";
+                        this.Title = $"Multi-Sheet Demo — current sheet: '{args.NewSheet?.Name}' (index {args.NewIndex}), A1='{firstCell}'";
+                        Console.WriteLine($"[MultiSheet] switched: '{args.OldSheet?.Name}' -> '{args.NewSheet?.Name}'");
+                    };
+
+                    this.multiSheetDemoWired = true;
+                }
+
+                // 1) Build a small "external" workbook: three worksheets, the last one hidden, so the
+                //    import can be exercised the way an arbitrary .xlsx file would be.
+                string path = Path.Combine(Path.GetTempPath(), "spreadalonia_multi_sheet_demo.xlsx");
+
+                using (FileStream output = File.Create(path))
+                using (var workbook = new ClosedXML.Excel.XLWorkbook())
+                {
+                    ClosedXML.Excel.IXLWorksheet summary = workbook.Worksheets.Add("Summary");
+                    summary.Cell(1, 1).Value = "Quarterly report";
+                    summary.Cell(2, 1).Value = "Region";
+                    summary.Cell(2, 2).Value = "Amount";
+                    summary.Cell(3, 1).Value = "North";
+                    summary.Cell(3, 2).Value = 1234.5;
+                    summary.Cell(4, 1).Value = "South";
+                    summary.Cell(4, 2).Value = 2345.6;
+                    summary.Column(1).Width = 20;
+                    summary.Column(2).Width = 15;
+
+                    ClosedXML.Excel.IXLWorksheet detail = workbook.Worksheets.Add("Detail");
+                    detail.Cell(1, 1).Value = "Date";
+                    detail.Cell(1, 2).Value = "Item";
+                    detail.Cell(2, 1).Value = "2026-10-01";
+                    detail.Cell(2, 2).Value = "Widget";
+
+                    ClosedXML.Excel.IXLWorksheet raw = workbook.Worksheets.Add("Raw data");
+                    raw.Cell(1, 1).Value = "internal only";
+                    raw.Hide();
+
+                    workbook.SaveAs(output);
+                }
+
+                // 2) Import: one SpreadsheetSheet per worksheet, same order, name, visibility and index.
+                IReadOnlyList<SpreadsheetSheet> sheets = SpreadsheetControl.LoadXlsx(path);
+
+                Console.WriteLine($"[MultiSheet] imported {sheets.Count} sheets: {string.Join(", ", sheets.Select(s => s.Name + (s.IsHidden ? " (hidden)" : "")))}");
+
+                // 3) Read the current sheet (the first one that is not hidden).
+                SpreadsheetSheet current = SpreadsheetControl.CurrentSheet;
+                Console.WriteLine($"[MultiSheet] current sheet: '{current?.Name}' (index {SpreadsheetControl.CurrentSheetIndex}), A1='{(current != null && current.Data.TryGetValue((0, 0), out string a1) ? a1 : null)}'");
+
+                this.Title = $"Multi-Sheet Demo — current sheet: '{SpreadsheetControl.CurrentSheet?.Name}' (index {SpreadsheetControl.CurrentSheetIndex}) — switch tabs to read the other sheets";
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("[MultiSheet] EXCEPTION: " + ex);
+            }
+        }
+
+        private bool multiSheetDemoWired;
 
         private void XlsxExportButton_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
         {

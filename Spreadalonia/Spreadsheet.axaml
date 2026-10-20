@@ -145,6 +145,7 @@
 		</ContextMenu>
 	</UserControl.ContextMenu>
 	<DockPanel LastChildFill="False">
+		<local:SheetTabStrip DockPanel.Dock="Bottom" Name="SheetTabStripControl" Container="{Binding $parent[1]}" IsTabStop="False" Focusable="False"/>
 		<ScrollBar DockPanel.Dock="Bottom" Orientation="Horizontal" Name="HorizontalScrollBar" Margin="0,0,16,0" AllowAutoHide="False" Maximum="1"></ScrollBar>
 		<ScrollBar DockPanel.Dock="Right" Orientation="Vertical" Name="VerticalScrollBar" AllowAutoHide="False" Maximum="1" Margin="-1,0,0,0"></ScrollBar>
 		<Grid ClipToBounds="True">

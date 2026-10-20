@@ -10,9 +10,29 @@ namespace Spreadalonia.Formula
     public class FormulaEngine
     {
         /// <summary>
-        /// The function registry containing built-in and custom functions.
+        /// The function registry containing built-in and custom functions. When the engine has been
+        /// created with an external registry, that same instance is shared with the other engines
+        /// that were created with it (e.g. the engine of every worksheet of a spreadsheet).
         /// </summary>
-        public FunctionRegistry Functions { get; } = new FunctionRegistry();
+        public FunctionRegistry Functions { get; }
+
+        /// <summary>
+        /// Creates a new formula engine with its own function registry.
+        /// </summary>
+        public FormulaEngine() : this(null) { }
+
+        /// <summary>
+        /// Creates a new formula engine.
+        /// </summary>
+        /// <param name="functions">
+        /// The function registry to use, or <see langword="null"/> to create a new one. Sharing a
+        /// registry makes the custom functions registered on one engine available to every engine
+        /// that was created with the same registry.
+        /// </param>
+        public FormulaEngine(FunctionRegistry functions)
+        {
+            this.Functions = functions ?? new FunctionRegistry();
+        }
 
         /// <summary>
         /// The dependency graph tracking cell relationships.

@@ -718,6 +718,9 @@ namespace Spreadalonia
             Brush hoverHighlightBrush = new SolidColorBrush(SelectionAccent.Color, 0.35);
             Pen selectionPen = new Pen(SelectionAccent, 2);
 
+            // A worksheet can ask for a focus rectangle instead of a filled selection.
+            bool fillSelection = this.Owner == null || this.Owner.Sheet == null || this.Owner.Sheet.SelectionStyle != SheetSelectionStyle.FocusRect;
+
             Typeface typeFace = new Typeface(this.FontFamily, this.FontStyle, this.FontWeight);
 
             using (context.PushTransform(Matrix.CreateTranslation(0, offsetY)))
@@ -781,8 +784,10 @@ namespace Spreadalonia
                         {
                             context.FillRectangle(selectionHighlightBrush, new Rect(new Point(0, y == 0 ? 0 : ys[y - 1]).SnapToDevicePixels(this, true, true), new Point(this.Bounds.Width, ys[y]).SnapToDevicePixels(this, true, true)));
                         }
-                        else if (selected[y] == 2)
+                        else if (selected[y] == 2 && fillSelection)
                         {
+                            // A worksheet that asks for a focus rectangle does not paint the whole
+                            // header of a selected row either.
                             context.FillRectangle(fullSelectionHighlightBrush, new Rect(new Point(0, y == 0 ? 0 : ys[y - 1]).SnapToDevicePixels(this, true, true), new Point(this.Bounds.Width, ys[y]).SnapToDevicePixels(this, true, true)));
                         }
                     }

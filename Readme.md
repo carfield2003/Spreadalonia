@@ -48,6 +48,8 @@ The spreadsheet implements the following basic features:
 * Inserting and deleting rows and columns
 * Undo/redo
 * Preview for cells containing colour values
+* Multiple worksheets with a tab strip (add, insert, remove, rename and reorder sheets)
+* Import from and export to Excel `.xlsx` workbooks (multiple worksheets, formulas, formatting)
 
 #### Non-features
 
@@ -191,9 +193,71 @@ The `Spreadsheet` control has the following useful <img src="property.svg"> prop
 
 * <img src="method.svg"> `void ScrollTopLeft()`: scrolls to the top-left corner of the spreadsheet.
 
+#### Worksheets (multi-sheet)
+
+The spreadsheet holds its content in one or more worksheets, represented by `SpreadsheetSheet` objects. Properties and methods that are not listed here (e.g. `Data`, `SetData`, `Selection`, `SetWidth`) keep working on the worksheet that is currently displayed. Most of them also have overloads that take an explicit `SpreadsheetSheet`, so that a host application can fill or query a worksheet that is not being displayed.
+
+* <img src="property.svg"> `IReadOnlyList<SpreadsheetSheet> Sheets { get; }`: the worksheets of the spreadsheet, in display order.
+
+* <img src="property.svg"> `SpreadsheetSheet CurrentSheet { get; }`: the worksheet that is being displayed.
+
+* <img src="property.svg"> `int CurrentSheetIndex { get; set; }`: the index of the displayed worksheet. This property supports two-way binding.
+
+* <img src="method.svg"> `SpreadsheetSheet AddSheet(string name)`: appends a new worksheet and makes it the current one.
+
+* <img src="method.svg"> `SpreadsheetSheet InsertSheet(int index, string name)`: inserts a new worksheet at the specified index.
+
+* <img src="method.svg"> `bool RemoveSheet(SpreadsheetSheet sheet)` and `bool RemoveSheetAt(int index)`: remove a worksheet. The spreadsheet always keeps at least one worksheet, so removing the last one is refused.
+
+* <img src="method.svg"> `string RenameSheet(SpreadsheetSheet sheet, string name)`: renames a worksheet and returns the name that is actually used (a name that is already taken is made unique by appending a counter).
+
+* <img src="method.svg"> `bool MoveSheet(SpreadsheetSheet sheet, int index)`: moves a worksheet to the specified position.
+
+* <img src="method.svg"> `void MoveToNextSheet()` and `void MoveToPreviousSheet()`: display the next or the previous worksheet (bound to `Ctrl+PageDown` / `Ctrl+PageUp`).
+
+* <img src="method.svg"> `int IndexOfSheet(SpreadsheetSheet sheet)`: returns the position of a worksheet, or `-1` if it does not belong to the spreadsheet.
+
+* <img src="method.svg"> `void RefreshSheetTabs()`: repaints the tab strip; worksheets that are added or removed refresh it automatically.
+
+* <img src="method.svg"> `IReadOnlyList<SpreadsheetSheet> LoadXlsx(Stream stream, XlsxImportOptions options = null)` and `IReadOnlyList<SpreadsheetSheet> LoadXlsx(string fileName, XlsxImportOptions options = null)`: import an Excel `.xlsx` workbook, creating one worksheet per worksheet of the workbook, in the same order, with the same name and the same visibility. The index of an imported worksheet matches the index of the worksheet it came from (hidden worksheets included). Formulas are kept and evaluated by the formula engine of their worksheet.
+
+* <img src="method.svg"> `void SaveXlsx(Stream stream, IReadOnlyList<SpreadsheetSheet> sheets, XlsxExportOptions options = null)` and `void SaveXlsx(string fileName, IReadOnlyList<SpreadsheetSheet> sheets, XlsxExportOptions options = null)`: export the specified worksheets to an Excel `.xlsx` workbook, one Excel worksheet per worksheet, keeping names and visibility. The existing single-worksheet `SaveXlsx(Stream, XlsxExportOptions)` overloads are still available and export the worksheet that is being displayed.
+
+Each `SpreadsheetSheet` exposes the worksheet content (`Data`, `ColumnWidths`, `RowHeights`, `MergedRanges`, custom cell dictionaries, ...), its view state and the following options:
+
+* <img src="property.svg"> `int Index { get; }`: the position of the worksheet, matching the index of the worksheet it was imported from.
+
+* <img src="property.svg"> `bool IsHidden { get; set; }`: hidden worksheets keep their index but their tab is not shown (unless `SheetTabHiddenSheetsVisible` is turned on); the host can still display them by setting `CurrentSheetIndex`.
+
+* <img src="property.svg"> `bool IsReadOnly { get; set; }`: when set, the user cannot edit, paste into or clear the cells of the worksheet; the host application can still write them programmatically.
+
+* <img src="property.svg"> `bool AllowDragMoveCells { get; set; }`: whether the user can move the content of a selection by dragging its border (`true` by default).
+
+* <img src="property.svg"> `bool AllowTextOverflow { get; set; }`: whether a text that is wider than its column may spill over the empty cells that follow it (`false` by default, so a cell never paints over its neighbours).
+
+* <img src="property.svg"> `SheetSelectionStyle SelectionStyle { get; set; }`: `Fill` (the default) paints a translucent fill inside the selection; `FocusRect` draws the outline only.
+
+The tab strip at the bottom of the control can be configured through the following properties:
+
+* <img src="property.svg"> `bool SheetTabVisible { get; set; }`: shows or hides the tab strip (`true` by default).
+
+* <img src="property.svg"> `bool SheetTabVisibleWhenSingle { get; set; }`: whether the tab strip is shown when the spreadsheet contains a single worksheet (`false` by default).
+
+* <img src="property.svg"> `bool SheetTabNewButtonVisible { get; set; }` (`true` by default), `bool SheetTabAllowRename { get; set; }` (`true`), `bool SheetTabAllowInsert { get; set; }` (`true`) and `bool SheetTabAllowReorder { get; set; }` (`true`): enable the "+" button and the rename, insert and reorder interactions.
+
+* <img src="property.svg"> `bool SheetTabAllowDelete { get; set; }`: enable the delete interaction (`false` by default).
+
+* <img src="property.svg"> `bool SheetTabHiddenSheetsVisible { get; set; }`: whether the tabs of hidden worksheets are shown (greyed out).
+
 ### Events
 
 The following <img src="event.svg"> events are defined for the `Spreadsheet` control:
+
+* <img src="event.svg"> `event EventHandler<CurrentSheetChangedEventArgs> CurrentSheetChanged`: raised when the worksheet that is displayed changes, either because the user picked another sheet tab or because `CurrentSheetIndex` was changed in code. The event arguments carry the previous and the new worksheet together with their indices.
+
+* <img src="event.svg"> `event EventHandler<SheetEventArgs> SheetInserted` and `event EventHandler<SheetEventArgs> SheetRemoved`: raised when a worksheet is added or removed; the `Sheet` and `Index` properties of the event arguments identify the worksheet.
+
+* <img src="event.svg"> `event EventHandler<SheetRenamedEventArgs> SheetRenamed` and `event EventHandler<SheetMovedEventArgs> SheetMoved`: raised when a worksheet is renamed (`OldName` / `NewName`) or reordered (`OldIndex` / `NewIndex`).
 
 * <img src="event.svg"> `event EventHandler<CellSizeChangedEventArgs> CellSizeChanged`: raised when the size of the selected cell changes (e.g., because the user has used the row or column headers to resize the cell). The `CellSizeChangedEventArgs` object will contain information about which cell has had its size changed and the new size.
 

@@ -19,6 +19,7 @@
 		<Button x:Name="FreezePanesButton" Content="Freeze Panes Demo" Click="FreezePanesButton_Click"/> 
 			<Button x:Name="FreezeMergeButton" Content="Freeze + Merged Title Demo" Click="FreezeMergeButton_Click"/>
 			<Button x:Name="XlsxExportButton" Content="Export Xlsx Demo" Click="XlsxExportButton_Click"/>
+		<Button x:Name="MultiSheetButton" Content="Multi-Sheet Demo" Click="MultiSheetButton_Click"/>
 			<CheckBox x:Name="TreeAnimationCheckBox" Content="Tree animation" IsChecked="True" VerticalAlignment="Center" IsCheckedChanged="TreeAnimationCheckBox_IsCheckedChanged"/>
 		</WrapPanel>
 		<local:Spreadsheet x:Name="SpreadsheetControl">

@@ -150,10 +150,686 @@ namespace Spreadalonia
         public Dictionary<(int, int), string> Data => IsInitialized ? ContentTable.Data : null;
 
         /// <summary>
-        /// The formula engine used for parsing and evaluating cell formulas.
-        /// Access this to register custom business functions via <see cref="FormulaEngine.Functions"/>.
+        /// The formula engine used for parsing and evaluating cell formulas. Access this to register
+        /// custom business functions via <see cref="FormulaEngine.Functions"/>: every worksheet has
+        /// its own engine (so that dependencies and cached results never leak from one worksheet
+        /// into another one) but they all share the same function registry, so a function that is
+        /// registered once is available on every worksheet.
         /// </summary>
-        public FormulaEngine FormulaEngine { get; } = new FormulaEngine();
+        public FormulaEngine FormulaEngine => this.CurrentSheet?.FormulaEngine;
+
+        // The worksheets of the spreadsheet. The list is owned by the control; SpreadsheetSheet.Index
+        // is kept in sync with the position in this list, hidden sheets included, so that the index
+        // of a sheet always matches the index of the worksheet it was imported from.
+        private readonly List<SpreadsheetSheet> sheets = new List<SpreadsheetSheet>();
+
+        // The function registry shared by the formula engine of every worksheet.
+        private readonly FunctionRegistry sharedFunctions = new FunctionRegistry();
+
+        /// <summary>
+        /// The worksheets of the spreadsheet, in the order in which they were created or imported.
+        /// Hidden worksheets are included, so that the index of a sheet always matches the index of
+        /// the worksheet it came from.
+        /// </summary>
+        public IReadOnlyList<SpreadsheetSheet> Sheets => this.sheets;
+
+        /// <summary>
+        /// The worksheet that is currently displayed, or <see langword="null"/> when the spreadsheet
+        /// has no worksheet. Every member that is not sheet-specific (e.g. <see cref="Data"/>) acts
+        /// on this worksheet.
+        /// </summary>
+        public SpreadsheetSheet CurrentSheet
+        {
+            get
+            {
+                int index = this.currentSheetIndex;
+                return index >= 0 && index < this.sheets.Count ? this.sheets[index] : null;
+            }
+        }
+
+        /// <summary>
+        /// Returns the index of the specified worksheet within <see cref="Sheets"/>, or -1 when the
+        /// worksheet does not belong to this spreadsheet.
+        /// </summary>
+        /// <param name="sheet">The worksheet to look for.</param>
+        public int IndexOfSheet(SpreadsheetSheet sheet)
+        {
+            return sheet == null ? -1 : this.sheets.IndexOf(sheet);
+        }
+
+        /// <summary>
+        /// Defines the <see cref="CurrentSheetIndex"/> property.
+        /// </summary>
+        public static readonly StyledProperty<int> CurrentSheetIndexProperty = AvaloniaProperty.Register<Spreadsheet, int>(nameof(CurrentSheetIndex), 0);
+
+        /// <summary>
+        /// The index of the worksheet that is currently displayed. Setting this property switches
+        /// the displayed worksheet; the property can be bound two-way, so that the host application
+        /// is told when the user picks another sheet tab.
+        /// </summary>
+        public int CurrentSheetIndex
+        {
+            get { return GetValue(CurrentSheetIndexProperty); }
+            set { SetValue(CurrentSheetIndexProperty, value); }
+        }
+
+        private int currentSheetIndex = 0;
+
+        /// <summary>
+        /// Raised when the worksheet that is displayed changes, either because the user picked
+        /// another sheet tab or because <see cref="CurrentSheetIndex"/> was changed in code.
+        /// </summary>
+        public event EventHandler<CurrentSheetChangedEventArgs> CurrentSheetChanged;
+
+        /// <summary>
+        /// Raised when a worksheet has been added to the spreadsheet.
+        /// </summary>
+        public event EventHandler<SheetEventArgs> SheetInserted;
+
+        /// <summary>
+        /// Adds a new, empty worksheet at the end of <see cref="Sheets"/> and returns it. The new
+        /// worksheet does not become the current one: use <see cref="CurrentSheetIndex"/> to
+        /// display it.
+        /// </summary>
+        /// <param name="name">
+        /// The name of the new worksheet. A name that is already taken is made unique by appending
+        /// a counter (e.g. <c>Sheet1 (2)</c>).
+        /// </param>
+        public SpreadsheetSheet AddSheet(string name)
+        {
+            return this.InsertSheet(this.sheets.Count, name);
+        }
+
+        /// <summary>
+        /// Inserts a new, empty worksheet at the specified position and returns it.
+        /// </summary>
+        /// <param name="index">The position the new worksheet is inserted at.</param>
+        /// <param name="name">The name of the new worksheet.</param>
+        public SpreadsheetSheet InsertSheet(int index, string name)
+        {
+            SpreadsheetSheet sheet = this.CreateSheet(this.MakeUniqueSheetName(name));
+
+            int insertIndex = Math.Max(0, Math.Min(this.sheets.Count, index));
+            this.sheets.Insert(insertIndex, sheet);
+            this.RefreshSheetIndices();
+
+            if (insertIndex <= this.currentSheetIndex)
+            {
+                // The sheet that is being displayed shifted along, but it is still the one that is
+                // displayed.
+                this.currentSheetIndex++;
+                SetValue(CurrentSheetIndexProperty, this.currentSheetIndex);
+            }
+
+            this.SheetInserted?.Invoke(this, new SheetEventArgs(sheet, insertIndex));
+            this.RefreshSheetTabs();
+
+            return sheet;
+        }
+
+        /// <summary>
+        /// Keeps <see cref="SpreadsheetSheet.Index"/> in sync with the position of each worksheet
+        /// within <see cref="Sheets"/>.
+        /// </summary>
+        private void RefreshSheetIndices()
+        {
+            for (int i = 0; i < this.sheets.Count; i++)
+            {
+                this.sheets[i].Index = i;
+            }
+        }
+
+        /// <summary>
+        /// Returns a name that is not used by any worksheet of this spreadsheet yet.
+        /// </summary>
+        /// <param name="name">The requested name.</param>
+        private string MakeUniqueSheetName(string name)
+        {
+            string baseName = string.IsNullOrWhiteSpace(name) ? "Sheet" + (this.sheets.Count + 1) : name;
+
+            if (!this.sheets.Any(s => s.Name == baseName))
+            {
+                return baseName;
+            }
+
+            int counter = 2;
+
+            while (this.sheets.Any(s => s.Name == baseName + " (" + counter + ")"))
+            {
+                counter++;
+            }
+
+            return baseName + " (" + counter + ")";
+        }
+
+        /// <summary>
+        /// Creates a worksheet with its own formula engine and returns it. The engine shares the
+        /// function registry of this spreadsheet.
+        /// </summary>
+        /// <param name="name">The name of the new worksheet.</param>
+        private SpreadsheetSheet CreateSheet(string name)
+        {
+            SpreadsheetSheet sheet = new SpreadsheetSheet(name) { Owner = this };
+
+            FormulaEngine engine = new FormulaEngine(this.sharedFunctions);
+            engine.SetDataAccessor((column, row) => Spreadsheet.GetCellData(sheet, column, row));
+            sheet.FormulaEngine = engine;
+
+            return sheet;
+        }
+
+        /// <summary>
+        /// Reads the value of a cell of the specified worksheet; used by the data accessor of the
+        /// formula engine of that worksheet.
+        /// </summary>
+        private static CellData GetCellData(SpreadsheetSheet sheet, int column, int row)
+        {
+            if (sheet.FormulaCells != null && sheet.FormulaCells.TryGetValue((column, row), out CellData formulaCell))
+            {
+                return formulaCell;
+            }
+
+            if (sheet.Data.TryGetValue((column, row), out string rawText))
+            {
+                return CellData.FromText(rawText);
+            }
+
+            return null;
+        }
+
+        // The strip of worksheet tabs at the bottom of the control.
+
+        /// <summary>
+        /// Defines the <see cref="SheetTabVisible"/> property.
+        /// </summary>
+        public static readonly StyledProperty<bool> SheetTabVisibleProperty = AvaloniaProperty.Register<Spreadsheet, bool>(nameof(SheetTabVisible), true);
+
+        /// <summary>
+        /// Whether the strip of worksheet tabs is shown at the bottom of the control. It is hidden
+        /// by default while the spreadsheet has a single worksheet (see
+        /// <see cref="SheetTabVisibleWhenSingle"/>), so that a single-sheet spreadsheet looks
+        /// exactly like it did before worksheets were introduced.
+        /// </summary>
+        public bool SheetTabVisible
+        {
+            get { return GetValue(SheetTabVisibleProperty); }
+            set { SetValue(SheetTabVisibleProperty, value); }
+        }
+
+        /// <summary>
+        /// Defines the <see cref="SheetTabVisibleWhenSingle"/> property.
+        /// </summary>
+        public static readonly StyledProperty<bool> SheetTabVisibleWhenSingleProperty = AvaloniaProperty.Register<Spreadsheet, bool>(nameof(SheetTabVisibleWhenSingle), false);
+
+        /// <summary>
+        /// Whether the strip of worksheet tabs is shown even while the spreadsheet has a single
+        /// worksheet. It is <see langword="false"/> by default, which keeps the strip from taking
+        /// any space in a single-sheet spreadsheet.
+        /// </summary>
+        public bool SheetTabVisibleWhenSingle
+        {
+            get { return GetValue(SheetTabVisibleWhenSingleProperty); }
+            set { SetValue(SheetTabVisibleWhenSingleProperty, value); }
+        }
+
+        /// <summary>
+        /// Defines the <see cref="SheetTabNewButtonVisible"/> property.
+        /// </summary>
+        public static readonly StyledProperty<bool> SheetTabNewButtonVisibleProperty = AvaloniaProperty.Register<Spreadsheet, bool>(nameof(SheetTabNewButtonVisible), true);
+
+        /// <summary>
+        /// Whether the "+" button that adds a new worksheet is shown at the right end of the strip.
+        /// It is only shown while <see cref="SheetTabAllowInsert"/> is <see langword="true"/>.
+        /// </summary>
+        public bool SheetTabNewButtonVisible
+        {
+            get { return GetValue(SheetTabNewButtonVisibleProperty); }
+            set { SetValue(SheetTabNewButtonVisibleProperty, value); }
+        }
+
+        /// <summary>
+        /// Defines the <see cref="SheetTabHiddenSheetsVisible"/> property.
+        /// </summary>
+        public static readonly StyledProperty<bool> SheetTabHiddenSheetsVisibleProperty = AvaloniaProperty.Register<Spreadsheet, bool>(nameof(SheetTabHiddenSheetsVisible), false);
+
+        /// <summary>
+        /// Whether the hidden worksheets are shown on the strip as well. They are not, by default;
+        /// the worksheet that is being displayed always has a tab, even when it is hidden.
+        /// </summary>
+        public bool SheetTabHiddenSheetsVisible
+        {
+            get { return GetValue(SheetTabHiddenSheetsVisibleProperty); }
+            set { SetValue(SheetTabHiddenSheetsVisibleProperty, value); }
+        }
+
+        /// <summary>
+        /// Defines the <see cref="SheetTabAllowRename"/> property.
+        /// </summary>
+        public static readonly StyledProperty<bool> SheetTabAllowRenameProperty = AvaloniaProperty.Register<Spreadsheet, bool>(nameof(SheetTabAllowRename), true);
+
+        /// <summary>
+        /// Whether the user can rename a worksheet by double clicking its tab (or through the
+        /// "Rename" item of the tab context menu).
+        /// </summary>
+        public bool SheetTabAllowRename
+        {
+            get { return GetValue(SheetTabAllowRenameProperty); }
+            set { SetValue(SheetTabAllowRenameProperty, value); }
+        }
+
+        /// <summary>
+        /// Defines the <see cref="SheetTabAllowDelete"/> property.
+        /// </summary>
+        public static readonly StyledProperty<bool> SheetTabAllowDeleteProperty = AvaloniaProperty.Register<Spreadsheet, bool>(nameof(SheetTabAllowDelete), false);
+
+        /// <summary>
+        /// Whether the user can delete a worksheet through the "Delete" item of the tab context
+        /// menu. It is <see langword="false"/> by default, so that a worksheet is never thrown away
+        /// by accident. The last worksheet of a spreadsheet can never be deleted.
+        /// </summary>
+        public bool SheetTabAllowDelete
+        {
+            get { return GetValue(SheetTabAllowDeleteProperty); }
+            set { SetValue(SheetTabAllowDeleteProperty, value); }
+        }
+
+        /// <summary>
+        /// Defines the <see cref="SheetTabAllowInsert"/> property.
+        /// </summary>
+        public static readonly StyledProperty<bool> SheetTabAllowInsertProperty = AvaloniaProperty.Register<Spreadsheet, bool>(nameof(SheetTabAllowInsert), true);
+
+        /// <summary>
+        /// Whether the user can add a worksheet through the "+" button of the strip.
+        /// </summary>
+        public bool SheetTabAllowInsert
+        {
+            get { return GetValue(SheetTabAllowInsertProperty); }
+            set { SetValue(SheetTabAllowInsertProperty, value); }
+        }
+
+        /// <summary>
+        /// Defines the <see cref="SheetTabAllowReorder"/> property.
+        /// </summary>
+        public static readonly StyledProperty<bool> SheetTabAllowReorderProperty = AvaloniaProperty.Register<Spreadsheet, bool>(nameof(SheetTabAllowReorder), true);
+
+        /// <summary>
+        /// Whether the user can move a worksheet through the "Move left" / "Move right" items of
+        /// the tab context menu.
+        /// </summary>
+        public bool SheetTabAllowReorder
+        {
+            get { return GetValue(SheetTabAllowReorderProperty); }
+            set { SetValue(SheetTabAllowReorderProperty, value); }
+        }
+
+        /// <summary>
+        /// Defines the <see cref="SheetTabHeight"/> property.
+        /// </summary>
+        public static readonly StyledProperty<double> SheetTabHeightProperty = AvaloniaProperty.Register<Spreadsheet, double>(nameof(SheetTabHeight), 28);
+
+        /// <summary>
+        /// The height of the strip of worksheet tabs.
+        /// </summary>
+        public double SheetTabHeight
+        {
+            get { return GetValue(SheetTabHeightProperty); }
+            set { SetValue(SheetTabHeightProperty, value); }
+        }
+
+        /// <summary>
+        /// Defines the <see cref="SheetTabBackground"/> property.
+        /// </summary>
+        public static readonly StyledProperty<IBrush> SheetTabBackgroundProperty = AvaloniaProperty.Register<Spreadsheet, IBrush>(nameof(SheetTabBackground), null);
+
+        /// <summary>
+        /// The background of the strip of worksheet tabs. When it is <see langword="null"/> (the
+        /// default) the strip is painted with <see cref="HeaderBackground"/>.
+        /// </summary>
+        public IBrush SheetTabBackground
+        {
+            get { return GetValue(SheetTabBackgroundProperty); }
+            set { SetValue(SheetTabBackgroundProperty, value); }
+        }
+
+        /// <summary>
+        /// Defines the <see cref="SheetTabForeground"/> property.
+        /// </summary>
+        public static readonly StyledProperty<IBrush> SheetTabForegroundProperty = AvaloniaProperty.Register<Spreadsheet, IBrush>(nameof(SheetTabForeground), null);
+
+        /// <summary>
+        /// The brush used to paint the name of the worksheets on the tabs. When it is
+        /// <see langword="null"/> (the default) the brush of the current theme is used, so that the
+        /// strip follows the light / dark mode of the application.
+        /// </summary>
+        public IBrush SheetTabForeground
+        {
+            get { return GetValue(SheetTabForegroundProperty); }
+            set { SetValue(SheetTabForegroundProperty, value); }
+        }
+
+        /// <summary>
+        /// Defines the <see cref="SheetTabSelectedBackground"/> property.
+        /// </summary>
+        public static readonly StyledProperty<IBrush> SheetTabSelectedBackgroundProperty = AvaloniaProperty.Register<Spreadsheet, IBrush>(nameof(SheetTabSelectedBackground), null);
+
+        /// <summary>
+        /// The background of the tab of the worksheet that is being displayed. When it is
+        /// <see langword="null"/> (the default) a semi-transparent <see cref="SelectionAccent"/> is
+        /// used.
+        /// </summary>
+        public IBrush SheetTabSelectedBackground
+        {
+            get { return GetValue(SheetTabSelectedBackgroundProperty); }
+            set { SetValue(SheetTabSelectedBackgroundProperty, value); }
+        }
+
+        /// <summary>
+        /// Defines the <see cref="SheetTabBorderBrush"/> property.
+        /// </summary>
+        public static readonly StyledProperty<IBrush> SheetTabBorderBrushProperty = AvaloniaProperty.Register<Spreadsheet, IBrush>(nameof(SheetTabBorderBrush), null);
+
+        /// <summary>
+        /// The brush used to paint the line above the strip and the separators between the tabs.
+        /// When it is <see langword="null"/> (the default) <see cref="GridColor"/> is used.
+        /// </summary>
+        public IBrush SheetTabBorderBrush
+        {
+            get { return GetValue(SheetTabBorderBrushProperty); }
+            set { SetValue(SheetTabBorderBrushProperty, value); }
+        }
+
+        /// <summary>
+        /// Raised when a worksheet has been removed from the spreadsheet.
+        /// </summary>
+        public event EventHandler<SheetEventArgs> SheetRemoved;
+
+        /// <summary>
+        /// Raised when a worksheet has been given another name.
+        /// </summary>
+        public event EventHandler<SheetRenamedEventArgs> SheetRenamed;
+
+        /// <summary>
+        /// Raised when a worksheet has been moved to another position.
+        /// </summary>
+        public event EventHandler<SheetMovedEventArgs> SheetMoved;
+
+        /// <summary>
+        /// Removes the specified worksheet from the spreadsheet. The last worksheet cannot be
+        /// removed.
+        /// </summary>
+        /// <param name="sheet">The worksheet to remove.</param>
+        /// <returns><see langword="true"/> when the worksheet has been removed.</returns>
+        public bool RemoveSheet(SpreadsheetSheet sheet)
+        {
+            return this.RemoveSheetAt(this.IndexOfSheet(sheet));
+        }
+
+        /// <summary>
+        /// Removes the worksheet at the specified position. The last worksheet cannot be removed.
+        /// </summary>
+        /// <param name="index">The position of the worksheet to remove.</param>
+        /// <returns><see langword="true"/> when the worksheet has been removed.</returns>
+        public bool RemoveSheetAt(int index)
+        {
+            if (index < 0 || index >= this.sheets.Count || this.sheets.Count == 1)
+            {
+                return false;
+            }
+
+            int oldCurrent = this.currentSheetIndex;
+
+            SpreadsheetSheet sheet = this.sheets[index];
+            this.sheets.RemoveAt(index);
+            this.RefreshSheetIndices();
+
+            int newIndex = oldCurrent;
+
+            if (index < oldCurrent)
+            {
+                newIndex--;
+            }
+            else if (index == oldCurrent)
+            {
+                newIndex = Math.Min(oldCurrent, this.sheets.Count - 1);
+            }
+
+            this.currentSheetIndex = newIndex;
+            SetValue(CurrentSheetIndexProperty, newIndex);
+
+            if (index == oldCurrent)
+            {
+                // The worksheet that was being displayed is gone: display the one that took its
+                // place. There is no view state to save, the sheet does not exist any more.
+                this.ApplyCurrentSheet(-1);
+            }
+
+            this.SheetRemoved?.Invoke(this, new SheetEventArgs(sheet, index));
+            this.RefreshSheetTabs();
+
+            return true;
+        }
+
+        /// <summary>
+        /// Gives another name to the specified worksheet. An empty name is ignored and a name that
+        /// is already taken is made unique by appending a counter.
+        /// </summary>
+        /// <param name="sheet">The worksheet to rename.</param>
+        /// <param name="name">The new name of the worksheet.</param>
+        /// <returns>The name the worksheet has been given.</returns>
+        public string RenameSheet(SpreadsheetSheet sheet, string name)
+        {
+            if (sheet == null || this.IndexOfSheet(sheet) < 0 || string.IsNullOrWhiteSpace(name))
+            {
+                return sheet?.Name;
+            }
+
+            string newName = name.Trim();
+
+            if (newName == sheet.Name)
+            {
+                return newName;
+            }
+
+            if (this.sheets.Any(s => s != sheet && s.Name == newName))
+            {
+                newName = this.MakeUniqueSheetName(newName);
+            }
+
+            string oldName = sheet.Name;
+            sheet.Name = newName;
+
+            this.SheetRenamed?.Invoke(this, new SheetRenamedEventArgs(sheet, sheet.Index, oldName, newName));
+            this.RefreshSheetTabs();
+
+            return newName;
+        }
+
+        /// <summary>
+        /// Moves the specified worksheet to another position, like dragging its tab does.
+        /// </summary>
+        /// <param name="sheet">The worksheet to move.</param>
+        /// <param name="index">The position the worksheet is moved to.</param>
+        /// <returns><see langword="true"/> when the worksheet has been moved.</returns>
+        public bool MoveSheet(SpreadsheetSheet sheet, int index)
+        {
+            int oldIndex = this.IndexOfSheet(sheet);
+
+            if (oldIndex < 0)
+            {
+                return false;
+            }
+
+            int newIndex = Math.Max(0, Math.Min(this.sheets.Count - 1, index));
+
+            if (newIndex == oldIndex)
+            {
+                return false;
+            }
+
+            SpreadsheetSheet current = this.CurrentSheet;
+
+            this.sheets.RemoveAt(oldIndex);
+            this.sheets.Insert(newIndex, sheet);
+            this.RefreshSheetIndices();
+
+            // The same worksheet is being displayed as before, only its position may have changed.
+            int newCurrent = this.IndexOfSheet(current);
+
+            this.currentSheetIndex = newCurrent;
+            SetValue(CurrentSheetIndexProperty, newCurrent);
+
+            this.SheetMoved?.Invoke(this, new SheetMovedEventArgs(sheet, oldIndex, newIndex));
+            this.RefreshSheetTabs();
+
+            return true;
+        }
+
+        /// <summary>
+        /// Rebuilds the strip of worksheet tabs. Call this after a worksheet has been added,
+        /// removed, renamed or moved, or after one of the options of the strip has been changed
+        /// in code.
+        /// </summary>
+        public void RefreshSheetTabs()
+        {
+            this.SheetTabStripControl?.Refresh();
+        }
+
+        // The strip of worksheet tabs; exposed for the automated tests of the Demo project.
+        internal SheetTabStrip SheetTabStripControlInternal => this.SheetTabStripControl;
+
+        /// <summary>
+        /// Displays the worksheet that follows the one that is being displayed, skipping the hidden
+        /// ones, like Ctrl+PageDown does.
+        /// </summary>
+        public void MoveToNextSheet()
+        {
+            this.MoveCurrentSheet(1);
+        }
+
+        /// <summary>
+        /// Displays the worksheet that precedes the one that is being displayed, skipping the
+        /// hidden ones, like Ctrl+PageUp does.
+        /// </summary>
+        public void MoveToPreviousSheet()
+        {
+            this.MoveCurrentSheet(-1);
+        }
+
+        /// <summary>
+        /// Displays the worksheet that follows (or precedes) the one that is being displayed,
+        /// skipping the hidden ones, like Ctrl+PageDown / Ctrl+PageUp do.
+        /// </summary>
+        /// <param name="delta">1 to move forward, -1 to move backwards.</param>
+        private void MoveCurrentSheet(int delta)
+        {
+            if (this.sheets.Count == 0)
+            {
+                return;
+            }
+
+            int index = this.currentSheetIndex;
+
+            for (int step = 0; step < this.sheets.Count; step++)
+            {
+                index += delta;
+
+                if (index < 0)
+                {
+                    index = this.sheets.Count - 1;
+                }
+                else if (index >= this.sheets.Count)
+                {
+                    index = 0;
+                }
+
+                if (!this.sheets[index].IsHidden || this.SheetTabHiddenSheetsVisible)
+                {
+                    break;
+                }
+            }
+
+            this.CurrentSheetIndex = index;
+        }
+
+        /// <summary>
+        /// Makes the worksheet selected by <see cref="currentSheetIndex"/> the one that is
+        /// displayed: the view state of the sheet that is being left behind is saved, the undo /
+        /// redo stacks are cleared and the state of the new sheet is applied.
+        /// </summary>
+        /// <param name="oldIndex">The index of the worksheet that was being displayed, or -1.</param>
+        /// <param name="raiseEvent">Whether <see cref="CurrentSheetChanged"/> should be raised.</param>
+        private void ApplyCurrentSheet(int oldIndex, bool raiseEvent = true)
+        {
+            if (this.sheets.Count == 0)
+            {
+                return;
+            }
+
+            int newIndex = Math.Max(0, Math.Min(this.sheets.Count - 1, this.currentSheetIndex));
+            this.currentSheetIndex = newIndex;
+
+            SpreadsheetSheet oldSheet = oldIndex >= 0 && oldIndex < this.sheets.Count ? this.sheets[oldIndex] : null;
+            SpreadsheetSheet newSheet = this.sheets[newIndex];
+
+            if (IsInitialized && oldSheet != null)
+            {
+                oldSheet.ScrollOffset = ContentTable.Offset;
+                oldSheet.Selection = this.Selection;
+            }
+
+            // The undo / redo stacks are not carried over from one worksheet to another one.
+            this.ClearUndoStack();
+            this.ClearRedoStack();
+
+            if (IsInitialized)
+            {
+                ContentTable.SetSheet(newSheet);
+
+                this.Selection = newSheet.Selection ?? ImmutableList.Create<SelectionRange>();
+
+                Vector offset = newSheet.ScrollOffset;
+
+                HorizontalScrollBar.Maximum = Math.Max(HorizontalScrollBar.Maximum, offset.X);
+                VerticalScrollBar.Maximum = Math.Max(VerticalScrollBar.Maximum, offset.Y);
+
+                HorizontalScrollBar.Value = offset.X;
+                VerticalScrollBar.Value = offset.Y;
+
+                ContentTable.PauseTransitions();
+                HorizontalHeaderControl.PauseTransitions();
+                VerticalHeaderControl.PauseTransitions();
+
+                ContentTable.Offset = offset;
+                HorizontalHeaderControl.Offset = offset;
+                VerticalHeaderControl.Offset = offset;
+                IconOverlay.Offset = offset;
+
+                ContentTable.ResumeTransitions();
+                HorizontalHeaderControl.ResumeTransitions();
+                VerticalHeaderControl.ResumeTransitions();
+
+                ContentTable.InvalidateVisual();
+                this.InvalidateHeaders();
+                TopLeftCornerControl.InvalidateVisual();
+                IconOverlay.InvalidateVisual();
+            }
+
+            this.SheetTabStripControl?.Refresh();
+
+            if (raiseEvent)
+            {
+                this.CurrentSheetChanged?.Invoke(this, new CurrentSheetChangedEventArgs(oldSheet, newSheet, oldSheet != null ? oldIndex : -1, newIndex));
+            }
+        }
+
+        protected override void OnInitialized()
+        {
+            base.OnInitialized();
+
+            // Apply the worksheet that was selected before the control had been initialised.
+            this.ApplyCurrentSheet(-1, false);
+            this.RefreshSheetTabs();
+        }
 
         /// <summary>
         /// Defines the <see cref="DefaultTextAlignment"/> property.
@@ -900,13 +1576,201 @@ namespace Spreadalonia
         }
 
         /// <summary>
+        /// Loads an Excel .xlsx workbook into the spreadsheet, creating one <see cref="SpreadsheetSheet"/>
+        /// per worksheet of the workbook, in the same order, with the same name and the same
+        /// visibility.
+        /// <para>
+        /// The index of an imported worksheet therefore matches the index of the worksheet it came
+        /// from, hidden worksheets included, so that <see cref="SpreadsheetSheet.Index"/> can be
+        /// used to go back to the worksheet in the source file. Unless
+        /// <see cref="XlsxImportOptions.ClearExistingSheets"/> is turned off, the worksheets the
+        /// spreadsheet already contained are dropped first.
+        /// </para>
+        /// </summary>
+        /// <param name="stream">A stream containing an .xlsx document.</param>
+        /// <param name="options">The options controlling the import, or <see langword="null"/> to use the defaults.</param>
+        /// <returns>The worksheets of the spreadsheet after the import, in the order of the workbook.</returns>
+        public IReadOnlyList<SpreadsheetSheet> LoadXlsx(Stream stream, XlsxImportOptions options = null)
+        {
+            if (stream == null)
+            {
+                throw new ArgumentNullException(nameof(stream));
+            }
+
+            XlsxImportOptions importOptions = options ?? new XlsxImportOptions();
+
+            return this.ApplyImportedSheets(XlsxImporter.Read(stream, importOptions), importOptions);
+        }
+
+        /// <summary>
+        /// Loads an Excel .xlsx file into the spreadsheet, creating one <see cref="SpreadsheetSheet"/>
+        /// per worksheet of the workbook, in the same order, with the same name and the same
+        /// visibility.
+        /// </summary>
+        /// <param name="fileName">The path of the .xlsx file to read.</param>
+        /// <param name="options">The options controlling the import, or <see langword="null"/> to use the defaults.</param>
+        /// <returns>The worksheets of the spreadsheet after the import, in the order of the workbook.</returns>
+        public IReadOnlyList<SpreadsheetSheet> LoadXlsx(string fileName, XlsxImportOptions options = null)
+        {
+            if (string.IsNullOrEmpty(fileName))
+            {
+                throw new ArgumentNullException(nameof(fileName));
+            }
+
+            using (FileStream fileStream = File.OpenRead(fileName))
+            {
+                return this.LoadXlsx(fileStream, options);
+            }
+        }
+
+        /// <summary>
+        /// Creates the worksheets described by the specified imported content and fills them, then
+        /// displays the first one that is not hidden.
+        /// </summary>
+        /// <param name="imported">The content of the worksheets of the workbook.</param>
+        /// <param name="options">The options controlling the import.</param>
+        /// <returns>The worksheets of the spreadsheet after the import.</returns>
+        private IReadOnlyList<SpreadsheetSheet> ApplyImportedSheets(List<XlsxImportedSheet> imported, XlsxImportOptions options)
+        {
+            bool replacing = options.ClearExistingSheets;
+
+            if (replacing)
+            {
+                // The worksheets that are being dropped are the ones of the previous document: their
+                // undo / redo history goes away with them.
+                for (int i = this.sheets.Count - 1; i >= 0; i--)
+                {
+                    SpreadsheetSheet removed = this.sheets[i];
+                    this.sheets.RemoveAt(i);
+                    this.SheetRemoved?.Invoke(this, new SheetEventArgs(removed, i));
+                }
+            }
+
+            foreach (XlsxImportedSheet source in imported)
+            {
+                SpreadsheetSheet sheet = this.CreateSheet(this.MakeUniqueSheetName(source.Name));
+                sheet.IsHidden = source.IsHidden;
+                this.sheets.Add(sheet);
+                this.ApplyImportedSheet(sheet, source);
+            }
+
+            if (this.sheets.Count == 0)
+            {
+                // A workbook always has at least one worksheet, but a stream that contains none must
+                // not leave the spreadsheet without one.
+                this.sheets.Add(this.CreateSheet("Sheet1"));
+            }
+
+            this.RefreshSheetIndices();
+
+            int target = Math.Max(0, Math.Min(this.currentSheetIndex, this.sheets.Count - 1));
+
+            if (replacing)
+            {
+                // The first worksheet that is not hidden is the one that is displayed, like Excel
+                // does when a workbook is opened.
+                target = 0;
+
+                for (int i = 0; i < this.sheets.Count; i++)
+                {
+                    if (!this.sheets[i].IsHidden)
+                    {
+                        target = i;
+                        break;
+                    }
+                }
+            }
+
+            this.currentSheetIndex = target;
+            SetValue(CurrentSheetIndexProperty, target);
+
+            // ApplyCurrentSheet clears the undo / redo stacks and repaints the control: the view
+            // state of the worksheets that were dropped cannot be saved anyway.
+            this.ApplyCurrentSheet(-1);
+            this.RefreshSheetTabs();
+
+            return this.sheets;
+        }
+
+        /// <summary>
+        /// Fills a worksheet with the content read from one worksheet of a workbook.
+        /// </summary>
+        /// <param name="sheet">The worksheet to fill.</param>
+        /// <param name="source">The content read from the workbook.</param>
+        private void ApplyImportedSheet(SpreadsheetSheet sheet, XlsxImportedSheet source)
+        {
+            sheet.Data = new Dictionary<(int, int), string>(source.Data);
+            sheet.FormulaCells.Clear();
+            sheet.FormulaEngine.Clear();
+
+            foreach (KeyValuePair<int, double> columnWidth in source.ColumnWidths)
+            {
+                sheet.ColumnWidths[columnWidth.Key] = columnWidth.Value;
+            }
+
+            foreach (KeyValuePair<int, double> rowHeight in source.RowHeights)
+            {
+                sheet.RowHeights[rowHeight.Key] = rowHeight.Value;
+            }
+
+            foreach (int row in source.HiddenRows)
+            {
+                sheet.HiddenRows.Add(row);
+            }
+
+            foreach (int column in source.HiddenColumns)
+            {
+                sheet.HiddenColumns.Add(column);
+            }
+
+            if (source.MergedRanges.Count > 0)
+            {
+                sheet.MergedRanges = ImmutableList.CreateRange(source.MergedRanges);
+            }
+
+            foreach (KeyValuePair<(int, int), Typeface> typeface in source.CellTypefaces)
+            {
+                sheet.CellTypefaces[typeface.Key] = typeface.Value;
+            }
+
+            foreach (KeyValuePair<(int, int), double> fontSize in source.CellFontSize)
+            {
+                sheet.CellFontSize[fontSize.Key] = fontSize.Value;
+            }
+
+            foreach (KeyValuePair<(int, int), IBrush> foreground in source.CellForeground)
+            {
+                sheet.CellForeground[foreground.Key] = foreground.Value;
+            }
+
+            foreach (KeyValuePair<(int, int), TextAlignment> alignment in source.CellTextAlignment)
+            {
+                sheet.CellTextAlignment[alignment.Key] = alignment.Value;
+            }
+
+            foreach (KeyValuePair<(int, int), VerticalAlignment> alignment in source.CellVerticalAlignment)
+            {
+                sheet.CellVerticalAlignment[alignment.Key] = alignment.Value;
+            }
+
+            if (source.CellBackgrounds.Count > 0)
+            {
+                sheet.CellBackgrounds.AddRange(source.CellBackgrounds);
+            }
+
+            // The formulas of the workbook are evaluated by the engine of the worksheet, so that
+            // they keep working after the import.
+            this.RecalculateSheet(sheet);
+        }
+
+        /// <summary>
         /// Saves the current content of the spreadsheet to an Excel .xlsx stream, using the
         /// default <see cref="XlsxExportOptions"/>.
         /// </summary>
         /// <param name="stream">The stream the .xlsx document is written to.</param>
         public void SaveXlsx(Stream stream)
         {
-            SaveXlsx(stream, null);
+            SaveXlsx(stream, (XlsxExportOptions)null);
         }
 
         /// <summary>
@@ -930,6 +1794,35 @@ namespace Spreadalonia
         }
 
         /// <summary>
+        /// Saves the specified worksheets of the spreadsheet to an Excel .xlsx stream, one Excel
+        /// worksheet per worksheet, in the order in which they are given. The name and the
+        /// visibility of each worksheet are kept, so that the workbook can be read back with
+        /// <see cref="LoadXlsx(Stream, XlsxImportOptions)"/> without losing the correspondence
+        /// between the worksheets and their index.
+        /// <para>
+        /// Pass <see cref="Sheets"/> to export the whole spreadsheet, or <see langword="null"/> (or
+        /// an empty list) to export the worksheet that is being displayed only.
+        /// </para>
+        /// </summary>
+        /// <param name="stream">The stream the .xlsx document is written to.</param>
+        /// <param name="sheets">The worksheets to export.</param>
+        /// <param name="options">The options controlling the export, or <see langword="null"/> to use the defaults.</param>
+        public void SaveXlsx(Stream stream, IReadOnlyList<SpreadsheetSheet> sheets, XlsxExportOptions options = null)
+        {
+            if (stream == null)
+            {
+                throw new ArgumentNullException(nameof(stream));
+            }
+
+            if (!IsInitialized)
+            {
+                throw new InvalidOperationException("The spreadsheet must be initialised before it can be exported to xlsx.");
+            }
+
+            XlsxExporter.Export(ContentTable, sheets, stream, options);
+        }
+
+        /// <summary>
         /// Saves the current content of the spreadsheet to an Excel .xlsx file.
         /// </summary>
         /// <param name="fileName">The path of the .xlsx file to create.</param>
@@ -944,6 +1837,26 @@ namespace Spreadalonia
             using (FileStream fileStream = File.Create(fileName))
             {
                 SaveXlsx(fileStream, options);
+            }
+        }
+
+        /// <summary>
+        /// Saves the specified worksheets of the spreadsheet to an Excel .xlsx file, one Excel
+        /// worksheet per worksheet, in the order in which they are given.
+        /// </summary>
+        /// <param name="fileName">The path of the .xlsx file to create.</param>
+        /// <param name="sheets">The worksheets to export.</param>
+        /// <param name="options">The options controlling the export, or <see langword="null"/> to use the defaults.</param>
+        public void SaveXlsx(string fileName, IReadOnlyList<SpreadsheetSheet> sheets, XlsxExportOptions options = null)
+        {
+            if (string.IsNullOrEmpty(fileName))
+            {
+                throw new ArgumentNullException(nameof(fileName));
+            }
+
+            using (FileStream fileStream = File.Create(fileName))
+            {
+                this.SaveXlsx(fileStream, sheets, options);
             }
         }
 
@@ -1191,19 +2104,11 @@ namespace Spreadalonia
         {
             InitializeComponent();
 
-            // Wire up formula engine to the table
-            ContentTable.FormulaEngine = this.FormulaEngine;
-
-            // Set the data accessor so formula engine can read cell values
-            this.FormulaEngine.SetDataAccessor((col, row) =>
-            {
-                if (ContentTable.FormulaCells != null &&
-                    ContentTable.FormulaCells.TryGetValue((col, row), out CellData formulaCell))
-                    return formulaCell;
-                if (ContentTable.Data.TryGetValue((col, row), out string rawText))
-                    return CellData.FromText(rawText);
-                return null;
-            });
+            // Every worksheet owns its formula engine; they all share the function registry of this
+            // spreadsheet, so that a custom function that is registered once works on every sheet.
+            SpreadsheetSheet firstSheet = this.CreateSheet("Sheet1");
+            this.sheets.Add(firstSheet);
+            ContentTable.SetSheet(firstSheet);
 
             HorizontalHeaderControl.FontFamily = this.HeaderFontFamily;
             VerticalHeaderControl.FontFamily = this.HeaderFontFamily;
@@ -1646,7 +2551,34 @@ namespace Spreadalonia
         {
             base.OnPropertyChanged(change);
 
-            if (change.Property == IsEditingProperty)
+            if (change.Property == CurrentSheetIndexProperty)
+            {
+                int oldIndex = this.currentSheetIndex;
+                int newIndex = this.CurrentSheetIndex;
+
+                if (newIndex != oldIndex)
+                {
+                    this.currentSheetIndex = newIndex;
+                    this.ApplyCurrentSheet(oldIndex);
+                }
+            }
+            else if (change.Property == SheetTabVisibleProperty
+                || change.Property == SheetTabVisibleWhenSingleProperty
+                || change.Property == SheetTabNewButtonVisibleProperty
+                || change.Property == SheetTabHiddenSheetsVisibleProperty
+                || change.Property == SheetTabAllowRenameProperty
+                || change.Property == SheetTabAllowDeleteProperty
+                || change.Property == SheetTabAllowInsertProperty
+                || change.Property == SheetTabAllowReorderProperty
+                || change.Property == SheetTabHeightProperty
+                || change.Property == SheetTabBackgroundProperty
+                || change.Property == SheetTabForegroundProperty
+                || change.Property == SheetTabSelectedBackgroundProperty
+                || change.Property == SheetTabBorderBrushProperty)
+            {
+                this.RefreshSheetTabs();
+            }
+            else if (change.Property == IsEditingProperty)
             {
                 if (IsEditing)
                 {
@@ -3939,6 +4871,357 @@ namespace Spreadalonia
             table.InvalidateVisual();
         }
 
+        // --- Sheet-specific variants: act on a specific worksheet instead of the current one ---
+
+        /// <summary>
+        /// Sets the value of the specified cells on the specified worksheet. When the worksheet is
+        /// the one that is being displayed, the call is the same as <see cref="SetData(IEnumerable{KeyValuePair{ValueTuple{int, int}, string}})"/>
+        /// and is undoable; otherwise the values are written directly into the worksheet, without
+        /// touching the undo / redo stack of the spreadsheet.
+        /// </summary>
+        /// <param name="sheet">The worksheet the values are written to.</param>
+        /// <param name="data">The cell coordinates and values to set. Cells with value <see langword="null"/> or empty string are removed.</param>
+        public void SetData(SpreadsheetSheet sheet, IEnumerable<KeyValuePair<(int, int), string>> data)
+        {
+            if (sheet == null)
+            {
+                return;
+            }
+
+            if (this.CurrentSheet == sheet)
+            {
+                this.SetData(data);
+                return;
+            }
+
+            foreach (KeyValuePair<(int, int), string> kvp in data)
+            {
+                if (!string.IsNullOrEmpty(kvp.Value))
+                {
+                    sheet.Data[kvp.Key] = kvp.Value;
+
+                    if (kvp.Value.Length > 1 && kvp.Value[0] == '=')
+                    {
+                        try
+                        {
+                            sheet.FormulaCells[kvp.Key] = sheet.FormulaEngine.Evaluate(kvp.Key, kvp.Value.Substring(1));
+                        }
+                        catch
+                        {
+                            sheet.FormulaCells[kvp.Key] = CellData.FromError(kvp.Value, "Evaluation error");
+                        }
+                    }
+                    else
+                    {
+                        sheet.FormulaCells.Remove(kvp.Key);
+                        sheet.FormulaEngine.RemoveCell(kvp.Key);
+                    }
+                }
+                else
+                {
+                    sheet.Data.Remove(kvp.Key);
+                    sheet.FormulaCells.Remove(kvp.Key);
+                    sheet.FormulaEngine.RemoveCell(kvp.Key);
+                }
+            }
+
+            foreach (KeyValuePair<(int, int), string> kvp in data)
+            {
+                if (kvp.Value != null && kvp.Value.Length > 1 && kvp.Value[0] == '=')
+                {
+                    foreach (KeyValuePair<(int, int), CellData> recalculated in sheet.FormulaEngine.CascadeRecalculate(kvp.Key))
+                    {
+                        sheet.FormulaCells[recalculated.Key] = recalculated.Value;
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Sets the width of the specified columns of the specified worksheet. When the worksheet
+        /// is the one that is being displayed, the call is the same as <see cref="SetWidth(Dictionary{int, double})"/>
+        /// and is undoable.
+        /// </summary>
+        /// <param name="sheet">The worksheet the widths are written to.</param>
+        /// <param name="columnWidths">The columns whose width has to be set, together with the new width.</param>
+        public void SetWidth(SpreadsheetSheet sheet, Dictionary<int, double> columnWidths)
+        {
+            if (sheet == null || columnWidths == null)
+            {
+                return;
+            }
+
+            if (this.CurrentSheet == sheet)
+            {
+                this.SetWidth(columnWidths);
+                return;
+            }
+
+            foreach (KeyValuePair<int, double> kvp in columnWidths)
+            {
+                sheet.ColumnWidths[kvp.Key] = kvp.Value;
+            }
+        }
+
+        /// <summary>
+        /// Sets the height of the specified rows of the specified worksheet. When the worksheet is
+        /// the one that is being displayed, the call is the same as <see cref="SetHeight(Dictionary{int, double})"/>
+        /// and is undoable.
+        /// </summary>
+        /// <param name="sheet">The worksheet the heights are written to.</param>
+        /// <param name="rowHeights">The rows whose height has to be set, together with the new height.</param>
+        public void SetHeight(SpreadsheetSheet sheet, Dictionary<int, double> rowHeights)
+        {
+            if (sheet == null || rowHeights == null)
+            {
+                return;
+            }
+
+            if (this.CurrentSheet == sheet)
+            {
+                this.SetHeight(rowHeights);
+                return;
+            }
+
+            foreach (KeyValuePair<int, double> kvp in rowHeights)
+            {
+                sheet.RowHeights[kvp.Key] = kvp.Value;
+            }
+        }
+
+        /// <summary>
+        /// Inserts <paramref name="count"/> empty columns just before the specified column index on
+        /// the specified worksheet. When the worksheet is the one that is being displayed, the call
+        /// is the same as <see cref="InsertColumns()"/> (with the right selection) and is undoable.
+        /// </summary>
+        /// <param name="sheet">The worksheet the columns are inserted into.</param>
+        /// <param name="index">The position the columns are inserted at.</param>
+        /// <param name="count">The number of columns to insert.</param>
+        public void InsertColumns(SpreadsheetSheet sheet, int index, int count)
+        {
+            if (sheet == null || count <= 0)
+            {
+                return;
+            }
+
+            if (this.CurrentSheet == sheet)
+            {
+                this.Selection = ImmutableList.Create(new SelectionRange(index, 0, index + count - 1, sheet.MaxTableHeight));
+                this.InsertColumns();
+                return;
+            }
+
+            // For a non-current worksheet there is no UI to repaint and no undo stack to keep in
+            // sync: shift every column-indexed and cell-indexed collection of the worksheet by
+            // count positions starting from index.
+            SelectionRange range = new SelectionRange(index, 0, index + count - 1, sheet.MaxTableHeight);
+
+            Stack<StackFrame<(int, int), string>> stringStack = new Stack<StackFrame<(int, int), string>>();
+            Stack<StackFrame<(int, int), IBrush>> brushStack = new Stack<StackFrame<(int, int), IBrush>>();
+            Stack<ValueStackFrame<(int, int), Thickness>> thicknessStack = new Stack<ValueStackFrame<(int, int), Thickness>>();
+            Stack<ValueStackFrame<(int, int), TextAlignment>> alignStack = new Stack<ValueStackFrame<(int, int), TextAlignment>>();
+            Stack<ValueStackFrame<(int, int), Typeface>> typefaceStack = new Stack<ValueStackFrame<(int, int), Typeface>>();
+            Stack<ValueStackFrame<(int, int), VerticalAlignment>> valignStack = new Stack<ValueStackFrame<(int, int), VerticalAlignment>>();
+            Stack<ValueStackFrame<(int, int), double>> doubleStack = new Stack<ValueStackFrame<(int, int), double>>();
+
+            Stack<StackFrame<(int, int), TitleCell>> titleStack = new Stack<StackFrame<(int, int), TitleCell>>();
+            Stack<StackFrame<(int, int), LinkCell>> linkStack = new Stack<StackFrame<(int, int), LinkCell>>();
+            Stack<StackFrame<(int, int), ButtonCell>> buttonStack = new Stack<StackFrame<(int, int), ButtonCell>>();
+            Stack<StackFrame<(int, int), TreeGradeCell>> treeStack = new Stack<StackFrame<(int, int), TreeGradeCell>>();
+            Stack<StackFrame<(int, int), NumericCell>> numericStack = new Stack<StackFrame<(int, int), NumericCell>>();
+
+            sheet.Data = sheet.Data.InsertColumns(range, stringStack);
+            sheet.CellForeground = sheet.CellForeground.InsertColumns(range, brushStack);
+            sheet.CellMargin = sheet.CellMargin.InsertColumns(range, thicknessStack);
+            sheet.CellTextAlignment = sheet.CellTextAlignment.InsertColumns(range, alignStack);
+            sheet.CellTypefaces = sheet.CellTypefaces.InsertColumns(range, typefaceStack);
+            sheet.CellVerticalAlignment = sheet.CellVerticalAlignment.InsertColumns(range, valignStack);
+            sheet.CellFontSize = sheet.CellFontSize.InsertColumns(range, doubleStack);
+            sheet.TitleCells = sheet.TitleCells.InsertColumns(range, titleStack);
+            sheet.LinkCells = sheet.LinkCells.InsertColumns(range, linkStack);
+            sheet.ButtonCells = sheet.ButtonCells.InsertColumns(range, buttonStack);
+            sheet.TreeCells = sheet.TreeCells.InsertColumns(range, treeStack);
+            sheet.NumericCells = sheet.NumericCells.InsertColumns(range, numericStack);
+
+            // The formula engine indexes its cached results and its dependency graph by cell, so
+            // instead of moving them they are dropped and rebuilt from the shifted data.
+            sheet.FormulaCells.Clear();
+            sheet.FormulaEngine.Clear();
+            this.RecalculateSheet(sheet);
+
+            // Column-keyed collections.
+            Stack<StackFrame<int, IBrush>> colBrushStack = new Stack<StackFrame<int, IBrush>>();
+            Stack<ValueStackFrame<int, Typeface>> colTypefaceStack = new Stack<ValueStackFrame<int, Typeface>>();
+            Stack<ValueStackFrame<int, double>> colWidthStack = new Stack<ValueStackFrame<int, double>>();
+
+            sheet.ColumnForeground = sheet.ColumnForeground.Insert(index, count, range, colBrushStack);
+            sheet.ColumnTypefaces = sheet.ColumnTypefaces.Insert(index, count, range, colTypefaceStack);
+            sheet.ColumnWidths = sheet.ColumnWidths.Insert(index, count, range, colWidthStack);
+
+            // Hidden columns: keep them in sync.
+            HashSet<int> newHidden = new HashSet<int>();
+            foreach (int h in sheet.HiddenColumns)
+            {
+                newHidden.Add(h >= index ? h + count : h);
+            }
+            sheet.HiddenColumns.Clear();
+            foreach (int h in newHidden) sheet.HiddenColumns.Add(h);
+
+            // Merged ranges: shift every range whose left edge is at >= index.
+            if (!sheet.MergedRanges.IsEmpty)
+            {
+                var b = sheet.MergedRanges.ToBuilder();
+                for (int i = 0; i < b.Count; i++)
+                {
+                    SelectionRange r = b[i];
+                    if (r.Left >= index)
+                    {
+                        b[i] = new SelectionRange(r.Left + count, r.Top, r.Right + count, r.Bottom);
+                    }
+                }
+                sheet.MergedRanges = b.ToImmutable();
+            }
+
+            // Read-only ranges: same shift.
+            if (sheet.ReadonlyRanges.Count > 0)
+            {
+                for (int i = 0; i < sheet.ReadonlyRanges.Count; i++)
+                {
+                    SelectionRange r = sheet.ReadonlyRanges[i];
+                    if (r.Left >= index)
+                    {
+                        sheet.ReadonlyRanges[i] = new SelectionRange(r.Left + count, r.Top, r.Right + count, r.Bottom);
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Deletes <paramref name="count"/> columns starting from the specified column index on the
+        /// specified worksheet. When the worksheet is the one that is being displayed, the call is
+        /// the same as <see cref="DeleteColumns()"/> (with the right selection) and is undoable.
+        /// </summary>
+        /// <param name="sheet">The worksheet the columns are removed from.</param>
+        /// <param name="index">The position the first removed column has.</param>
+        /// <param name="count">The number of columns to remove.</param>
+        public void DeleteColumns(SpreadsheetSheet sheet, int index, int count)
+        {
+            if (sheet == null || count <= 0)
+            {
+                return;
+            }
+
+            if (this.CurrentSheet == sheet)
+            {
+                this.Selection = ImmutableList.Create(new SelectionRange(index, 0, index + count - 1, sheet.MaxTableHeight));
+                this.DeleteColumns();
+                return;
+            }
+
+            SelectionRange range = new SelectionRange(index, 0, index + count - 1, sheet.MaxTableHeight);
+
+            Stack<StackFrame<(int, int), string>> stringStack = new Stack<StackFrame<(int, int), string>>();
+            Stack<StackFrame<(int, int), IBrush>> brushStack = new Stack<StackFrame<(int, int), IBrush>>();
+            Stack<ValueStackFrame<(int, int), Thickness>> thicknessStack = new Stack<ValueStackFrame<(int, int), Thickness>>();
+            Stack<ValueStackFrame<(int, int), TextAlignment>> alignStack = new Stack<ValueStackFrame<(int, int), TextAlignment>>();
+            Stack<ValueStackFrame<(int, int), Typeface>> typefaceStack = new Stack<ValueStackFrame<(int, int), Typeface>>();
+            Stack<ValueStackFrame<(int, int), VerticalAlignment>> valignStack = new Stack<ValueStackFrame<(int, int), VerticalAlignment>>();
+            Stack<ValueStackFrame<(int, int), double>> doubleStack = new Stack<ValueStackFrame<(int, int), double>>();
+
+            Stack<StackFrame<(int, int), TitleCell>> titleStack = new Stack<StackFrame<(int, int), TitleCell>>();
+            Stack<StackFrame<(int, int), LinkCell>> linkStack = new Stack<StackFrame<(int, int), LinkCell>>();
+            Stack<StackFrame<(int, int), ButtonCell>> buttonStack = new Stack<StackFrame<(int, int), ButtonCell>>();
+            Stack<StackFrame<(int, int), TreeGradeCell>> treeStack = new Stack<StackFrame<(int, int), TreeGradeCell>>();
+            Stack<StackFrame<(int, int), NumericCell>> numericStack = new Stack<StackFrame<(int, int), NumericCell>>();
+
+            sheet.Data = sheet.Data.DeleteColumns(range, stringStack);
+            sheet.CellForeground = sheet.CellForeground.DeleteColumns(range, brushStack);
+            sheet.CellMargin = sheet.CellMargin.DeleteColumns(range, thicknessStack);
+            sheet.CellTextAlignment = sheet.CellTextAlignment.DeleteColumns(range, alignStack);
+            sheet.CellTypefaces = sheet.CellTypefaces.DeleteColumns(range, typefaceStack);
+            sheet.CellVerticalAlignment = sheet.CellVerticalAlignment.DeleteColumns(range, valignStack);
+            sheet.CellFontSize = sheet.CellFontSize.DeleteColumns(range, doubleStack);
+            sheet.TitleCells = sheet.TitleCells.DeleteColumns(range, titleStack);
+            sheet.LinkCells = sheet.LinkCells.DeleteColumns(range, linkStack);
+            sheet.ButtonCells = sheet.ButtonCells.DeleteColumns(range, buttonStack);
+            sheet.TreeCells = sheet.TreeCells.DeleteColumns(range, treeStack);
+            sheet.NumericCells = sheet.NumericCells.DeleteColumns(range, numericStack);
+
+            // The formula engine indexes its cached results and its dependency graph by cell, so
+            // instead of moving them they are dropped and rebuilt from the shifted data.
+            sheet.FormulaCells.Clear();
+            sheet.FormulaEngine.Clear();
+            this.RecalculateSheet(sheet);
+
+            Stack<StackFrame<int, IBrush>> colBrushStack = new Stack<StackFrame<int, IBrush>>();
+            Stack<ValueStackFrame<int, Typeface>> colTypefaceStack = new Stack<ValueStackFrame<int, Typeface>>();
+            Stack<ValueStackFrame<int, double>> colWidthStack = new Stack<ValueStackFrame<int, double>>();
+
+            sheet.ColumnForeground = sheet.ColumnForeground.Delete(index, count, range, colBrushStack);
+            sheet.ColumnTypefaces = sheet.ColumnTypefaces.Delete(index, count, range, colTypefaceStack);
+            sheet.ColumnWidths = sheet.ColumnWidths.Delete(index, count, range, colWidthStack);
+
+            HashSet<int> newHidden = new HashSet<int>();
+            foreach (int h in sheet.HiddenColumns)
+            {
+                if (h < index) newHidden.Add(h);
+                else if (h >= index + count) newHidden.Add(h - count);
+            }
+            sheet.HiddenColumns.Clear();
+            foreach (int h in newHidden) sheet.HiddenColumns.Add(h);
+
+            if (!sheet.MergedRanges.IsEmpty)
+            {
+                var b = sheet.MergedRanges.ToBuilder();
+                for (int i = 0; i < b.Count; i++)
+                {
+                    SelectionRange r = b[i];
+                    if (r.Right < index) continue;
+                    int newLeft = r.Left < index ? index : r.Left;
+                    int newRight = r.Right - count;
+                    if (newRight < newLeft) { b.RemoveAt(i); i--; continue; }
+                    b[i] = new SelectionRange(newLeft, r.Top, newRight, r.Bottom);
+                }
+                sheet.MergedRanges = b.ToImmutable();
+            }
+        }
+
+        /// <summary>
+        /// Re-evaluates every formula of the specified worksheet and stores the results in its
+        /// formula cells. Used after the data of a worksheet has been changed in bulk (e.g. after
+        /// columns have been inserted into or removed from a worksheet that is not being displayed)
+        /// and after the formula engine has been cleared.
+        /// </summary>
+        /// <param name="sheet">The worksheet whose formulas are re-evaluated.</param>
+        private void RecalculateSheet(SpreadsheetSheet sheet)
+        {
+            if (sheet == null || sheet.Data == null)
+            {
+                return;
+            }
+
+            foreach (KeyValuePair<(int, int), string> kvp in sheet.Data)
+            {
+                if (kvp.Value != null && kvp.Value.Length > 1 && kvp.Value[0] == '=')
+                {
+                    string formula = kvp.Value.Substring(1);
+
+                    try
+                    {
+                        sheet.FormulaCells[kvp.Key] = sheet.FormulaEngine.Evaluate(kvp.Key, formula);
+                    }
+                    catch
+                    {
+                        sheet.FormulaCells[kvp.Key] = CellData.FromError(formula, "Evaluation error");
+                    }
+                }
+            }
+
+            if (IsInitialized && this.CurrentSheet == sheet)
+            {
+                ContentTable.InvalidateVisual();
+            }
+        }
 
         /// <summary>
         /// Sets the vertical text alignment of the current selection.
@@ -4001,6 +5284,19 @@ namespace Spreadalonia
 
             if (!e.Handled && !EditingBox.IsFocused)
             {
+                if (e.KeyModifiers == Spreadsheet.ControlModifier && e.Key == Key.PageDown)
+                {
+                    this.MoveToNextSheet();
+                    e.Handled = true;
+                    return;
+                }
+                else if (e.KeyModifiers == Spreadsheet.ControlModifier && e.Key == Key.PageUp)
+                {
+                    this.MoveToPreviousSheet();
+                    e.Handled = true;
+                    return;
+                }
+
                 if (this.Selection.Count > 0)
                 {
                     SelectionRange startSelection = this.Selection[this.Selection.Count - 1];

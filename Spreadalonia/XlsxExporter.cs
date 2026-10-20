@@ -176,6 +176,22 @@ namespace Spreadalonia
 
         public static void Export(Table table, Stream stream, XlsxExportOptions options)
         {
+            Export(table, table != null ? new SpreadsheetSheet[] { table.Sheet } : null, stream, options);
+        }
+
+        /// <summary>
+        /// Exports the specified worksheets of a spreadsheet to an Excel .xlsx stream, one Excel
+        /// worksheet per worksheet, in the order they are given in. The name and the visibility of
+        /// each worksheet are kept, so that the workbook can be read back with
+        /// <see cref="Spreadsheet.LoadXlsx(System.IO.Stream, XlsxImportOptions)"/> without losing
+        /// the correspondence between the worksheets and their index.
+        /// </summary>
+        /// <param name="table">The table that renders the worksheets.</param>
+        /// <param name="sheets">The worksheets to export, or <see langword="null"/> / empty to export the one that is being displayed.</param>
+        /// <param name="stream">The stream the .xlsx document is written to.</param>
+        /// <param name="options">The options controlling the export, or <see langword="null"/> to use the defaults.</param>
+        public static void Export(Table table, IReadOnlyList<SpreadsheetSheet> sheets, Stream stream, XlsxExportOptions options)
+        {
             if (table == null)
             {
                 throw new ArgumentNullException(nameof(table));
@@ -186,6 +202,24 @@ namespace Spreadalonia
             }
 
             options = options ?? new XlsxExportOptions();
+
+            List<SpreadsheetSheet> targets = new List<SpreadsheetSheet>();
+
+            if (sheets != null)
+            {
+                foreach (SpreadsheetSheet candidate in sheets)
+                {
+                    if (candidate != null)
+                    {
+                        targets.Add(candidate);
+                    }
+                }
+            }
+
+            if (targets.Count == 0 && table.Sheet != null)
+            {
+                targets.Add(table.Sheet);
+            }
 
             HashSet<string> allowedFunctions = new HashSet<string>(ExcelFunctions, StringComparer.OrdinalIgnoreCase);
             if (options.AdditionalExcelFunctions != null)
@@ -201,14 +235,54 @@ namespace Spreadalonia
 
             using (XLWorkbook workbook = new XLWorkbook())
             {
-                IXLWorksheet sheet = workbook.Worksheets.Add("Sheet1");
+                HashSet<string> usedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                SpreadsheetSheet restore = table.Sheet;
 
+                try
+                {
+                    foreach (SpreadsheetSheet target in targets)
+                    {
+                        // The table renders the worksheet it is pointed at, so switching it is all
+                        // it takes to export a worksheet that is not the one being displayed.
+                        table.SetSheet(target);
+
+                        IXLWorksheet sheet = workbook.Worksheets.Add(MakeExcelSheetName(target.Name, usedNames));
+
+                        if (target.IsHidden)
+                        {
+                            sheet.Visibility = XLWorksheetVisibility.Hidden;
+                        }
+
+                        WriteSheet(table, sheet, allowedFunctions, options);
+                    }
+                }
+                finally
+                {
+                    // Leave the table rendering the worksheet it was rendering before, whatever
+                    // happened while the other ones were being written.
+                    table.SetSheet(restore);
+                    table.InvalidateTreeCache();
+                    table.InvalidateVisual();
+                }
+
+                workbook.SaveAs(stream);
+            }
+        }
+
+        /// <summary>
+        /// Writes the worksheet the table is currently rendering into the specified Excel worksheet.
+        /// </summary>
+        /// <param name="table">The table that renders the worksheet.</param>
+        /// <param name="sheet">The Excel worksheet the content is written to.</param>
+        /// <param name="allowedFunctions">The Excel-compatible function names.</param>
+        /// <param name="options">The options controlling the export.</param>
+        private static void WriteSheet(Table table, IXLWorksheet sheet, HashSet<string> allowedFunctions, XlsxExportOptions options)
+        {
                 // Determine the used bounds.
                 (int maxCol, int maxRow) = ComputeBounds(table);
                 if (maxCol < 0 || maxRow < 0)
                 {
-                    // Empty table: still produce a valid workbook.
-                    workbook.SaveAs(stream);
+                    // Empty worksheet: the Excel worksheet stays empty.
                     return;
                 }
 
@@ -402,8 +476,56 @@ namespace Spreadalonia
                 {
                     ApplyBorders(sheet, table.CellBorders, maxCol, maxRow);
                 }
+        }
 
-                workbook.SaveAs(stream);
+        /// <summary>
+        /// Turns the name of a worksheet into a name Excel accepts for a worksheet (31 characters
+        /// at most, no <c>: \ / ? * [ ]</c>) that is not used by another worksheet of the same
+        /// workbook yet.
+        /// </summary>
+        /// <param name="name">The name of the worksheet.</param>
+        /// <param name="usedNames">The names that are already taken; the returned one is added to it.</param>
+        internal static string MakeExcelSheetName(string name, HashSet<string> usedNames)
+        {
+            string baseName = string.IsNullOrWhiteSpace(name) ? "Sheet" : name.Trim();
+
+            StringBuilder sanitized = new StringBuilder(baseName.Length);
+
+            foreach (char character in baseName)
+            {
+                sanitized.Append(character == ':' || character == '\\' || character == '/' || character == '?' || character == '*' || character == '[' || character == ']' ? '_' : character);
+            }
+
+            if (sanitized.Length > 31)
+            {
+                sanitized.Length = 31;
+            }
+
+            if (sanitized.Length == 0)
+            {
+                sanitized.Append("Sheet");
+            }
+
+            string candidate = sanitized.ToString();
+
+            if (usedNames.Add(candidate))
+            {
+                return candidate;
+            }
+
+            int counter = 2;
+
+            while (true)
+            {
+                string suffix = "_" + counter.ToString(CultureInfo.InvariantCulture);
+                string truncated = candidate.Length + suffix.Length > 31 ? candidate.Substring(0, 31 - suffix.Length) : candidate;
+
+                if (usedNames.Add(truncated + suffix))
+                {
+                    return truncated + suffix;
+                }
+
+                counter++;
             }
         }
 

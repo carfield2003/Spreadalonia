@@ -126,57 +126,161 @@ namespace Spreadalonia
         }
 
 
-        public int MaxTableHeight { get; set; } = int.MaxValue - 2;
-        public int MaxTableWidth { get; set; } = int.MaxValue - 2;
+        /// <summary>
+        /// The worksheet whose state is currently rendered by this table. The table itself holds no
+        /// data: every state property forwards to this object, so that switching worksheet is a
+        /// matter of replacing it (see <see cref="SetSheet(SpreadsheetSheet)"/>).
+        /// </summary>
+        internal SpreadsheetSheet Sheet { get; private set; } = new SpreadsheetSheet("Sheet1");
+
+        /// <summary>
+        /// Makes the specified worksheet the one that is rendered by this table. Every state
+        /// property of the table forwards to the worksheet, so this is all that is needed to
+        /// display another worksheet of the same spreadsheet.
+        /// </summary>
+        /// <param name="sheet">The worksheet to render.</param>
+        internal void SetSheet(SpreadsheetSheet sheet)
+        {
+            this.Sheet = sheet ?? new SpreadsheetSheet("Sheet1");
+            this.InvalidateVisual();
+            this.InvalidateHeaders();
+        }
+
+        public int MaxTableHeight
+        {
+            get { return this.Sheet.MaxTableHeight; }
+            set { this.Sheet.MaxTableHeight = value; this.InvalidateVisual(); }
+        }
+
+        public int MaxTableWidth
+        {
+            get { return this.Sheet.MaxTableWidth; }
+            set { this.Sheet.MaxTableWidth = value; this.InvalidateVisual(); }
+        }
 
 
-        public Dictionary<(int, int), string> Data { get; internal set; }
+        public Dictionary<(int, int), string> Data
+        {
+            get { return this.Sheet.Data; }
+            internal set { this.Sheet.Data = value ?? new Dictionary<(int, int), string>(); }
+        }
 
         /// <summary>
         /// Stores the parsed and evaluated formula data for cells that contain formulas.
         /// Key: (col, row), Value: CellData with formula info and cached value.
         /// </summary>
-        public Dictionary<(int, int), CellData> FormulaCells { get; internal set; }
+        public Dictionary<(int, int), CellData> FormulaCells
+        {
+            get { return this.Sheet.FormulaCells; }
+            internal set { this.Sheet.FormulaCells = value ?? new Dictionary<(int, int), CellData>(); }
+        }
 
         /// <summary>
         /// Reference to the formula engine for evaluation.
         /// </summary>
-        public FormulaEngine FormulaEngine { get; set; }
+        public FormulaEngine FormulaEngine
+        {
+            get { return this.Sheet.FormulaEngine; }
+            set { this.Sheet.FormulaEngine = value; }
+        }
 
-        public Dictionary<int, double> RowHeights { get; internal set; }
-        public Dictionary<int, double> ColumnWidths { get; internal set; }
+        public Dictionary<int, double> RowHeights
+        {
+            get { return this.Sheet.RowHeights; }
+            internal set { this.Sheet.RowHeights = value ?? new Dictionary<int, double>(); }
+        }
 
-        public Dictionary<int, Typeface> RowTypefaces { get; internal set; }
-        public Dictionary<int, Typeface> ColumnTypefaces { get; internal set; }
-        public Dictionary<(int, int), Typeface> CellTypefaces { get; internal set; }
+        public Dictionary<int, double> ColumnWidths
+        {
+            get { return this.Sheet.ColumnWidths; }
+            internal set { this.Sheet.ColumnWidths = value ?? new Dictionary<int, double>(); }
+        }
 
-        public Dictionary<int, IBrush> RowForeground { get; internal set; }
-        public Dictionary<int, IBrush> ColumnForeground { get; internal set; }
-        public Dictionary<(int, int), IBrush> CellForeground { get; internal set; }
+        public Dictionary<int, Typeface> RowTypefaces
+        {
+            get { return this.Sheet.RowTypefaces; }
+            internal set { this.Sheet.RowTypefaces = value ?? new Dictionary<int, Typeface>(); }
+        }
 
-        public Dictionary<(int, int), TextAlignment> CellTextAlignment { get; internal set; }
-        public Dictionary<(int, int), VerticalAlignment> CellVerticalAlignment { get; internal set; }
-        public Dictionary<(int, int), Thickness> CellMargin { get; internal set; }
+        public Dictionary<int, Typeface> ColumnTypefaces
+        {
+            get { return this.Sheet.ColumnTypefaces; }
+            internal set { this.Sheet.ColumnTypefaces = value ?? new Dictionary<int, Typeface>(); }
+        }
+
+        public Dictionary<(int, int), Typeface> CellTypefaces
+        {
+            get { return this.Sheet.CellTypefaces; }
+            internal set { this.Sheet.CellTypefaces = value ?? new Dictionary<(int, int), Typeface>(); }
+        }
+
+        public Dictionary<int, IBrush> RowForeground
+        {
+            get { return this.Sheet.RowForeground; }
+            internal set { this.Sheet.RowForeground = value ?? new Dictionary<int, IBrush>(); }
+        }
+
+        public Dictionary<int, IBrush> ColumnForeground
+        {
+            get { return this.Sheet.ColumnForeground; }
+            internal set { this.Sheet.ColumnForeground = value ?? new Dictionary<int, IBrush>(); }
+        }
+
+        public Dictionary<(int, int), IBrush> CellForeground
+        {
+            get { return this.Sheet.CellForeground; }
+            internal set { this.Sheet.CellForeground = value ?? new Dictionary<(int, int), IBrush>(); }
+        }
+
+        public Dictionary<(int, int), TextAlignment> CellTextAlignment
+        {
+            get { return this.Sheet.CellTextAlignment; }
+            internal set { this.Sheet.CellTextAlignment = value ?? new Dictionary<(int, int), TextAlignment>(); }
+        }
+
+        public Dictionary<(int, int), VerticalAlignment> CellVerticalAlignment
+        {
+            get { return this.Sheet.CellVerticalAlignment; }
+            internal set { this.Sheet.CellVerticalAlignment = value ?? new Dictionary<(int, int), VerticalAlignment>(); }
+        }
+
+        public Dictionary<(int, int), Thickness> CellMargin
+        {
+            get { return this.Sheet.CellMargin; }
+            internal set { this.Sheet.CellMargin = value ?? new Dictionary<(int, int), Thickness>(); }
+        }
 
         /// <summary>
         /// The font size of each cell, indexed by (column, row). If a cell is not present in this
         /// dictionary, the <see cref="Table.FontSize"/> value is used.
         /// </summary>
-        public Dictionary<(int, int), double> CellFontSize { get; internal set; } = new Dictionary<(int, int), double>();
+        public Dictionary<(int, int), double> CellFontSize
+        {
+            get { return this.Sheet.CellFontSize; }
+            internal set { this.Sheet.CellFontSize = value ?? new Dictionary<(int, int), double>(); }
+        }
 
         /// <summary>
         /// The custom title cells, indexed by (column, row). When a cell has a title cell, the
         /// title cell is rendered instead of the regular text content. This is used for report
         /// captions that contain multiple formatted text chunks (e.g. a title and subtitle).
         /// </summary>
-        public Dictionary<(int, int), TitleCell> TitleCells { get; internal set; } = new Dictionary<(int, int), TitleCell>();
+        public Dictionary<(int, int), TitleCell> TitleCells
+        {
+            get { return this.Sheet.TitleCells; }
+            internal set { this.Sheet.TitleCells = value ?? new Dictionary<(int, int), TitleCell>(); }
+        }
 
         /// <summary>
         /// The clickable link cells, indexed by (column, row). When a cell has a link cell, the
         /// link text is rendered instead of the regular text content, hovering over the link
         /// shows a hand cursor and clicking it raises the <see cref="Spreadsheet.LinkClick"/> event.
         /// </summary>
-        public Dictionary<(int, int), LinkCell> LinkCells { get; internal set; } = new Dictionary<(int, int), LinkCell>();
+        public Dictionary<(int, int), LinkCell> LinkCells
+        {
+            get { return this.Sheet.LinkCells; }
+            internal set { this.Sheet.LinkCells = value ?? new Dictionary<(int, int), LinkCell>(); }
+        }
 
         /// <summary>
         /// The clickable button cells, indexed by (column, row). A button cell renders a button
@@ -185,7 +289,11 @@ namespace Spreadalonia
         /// the host uses to open its own selection dialog (e.g. to pick an auxiliary accounting
         /// item) instead of editing the text.
         /// </summary>
-        public Dictionary<(int, int), ButtonCell> ButtonCells { get; internal set; } = new Dictionary<(int, int), ButtonCell>();
+        public Dictionary<(int, int), ButtonCell> ButtonCells
+        {
+            get { return this.Sheet.ButtonCells; }
+            internal set { this.Sheet.ButtonCells = value ?? new Dictionary<(int, int), ButtonCell>(); }
+        }
 
         /// <summary>
         /// The account-tree cells, indexed by (column, row). A tree cell renders an indented
@@ -193,20 +301,28 @@ namespace Spreadalonia
         /// <see cref="Spreadsheet.TreeExpand"/> event and (in automatic mode) collapses or expands
         /// the rows below.
         /// </summary>
-        public Dictionary<(int, int), TreeGradeCell> TreeCells { get; internal set; } = new Dictionary<(int, int), TreeGradeCell>();
+        public Dictionary<(int, int), TreeGradeCell> TreeCells
+        {
+            get { return this.Sheet.TreeCells; }
+            internal set { this.Sheet.TreeCells = value ?? new Dictionary<(int, int), TreeGradeCell>(); }
+        }
 
         /// <summary>
         /// The numeric cells, indexed by (column, row). A numeric cell renders its raw content
         /// formatted with thousand separators and a fixed number of decimal digits, and only
         /// accepts numeric input while editing.
         /// </summary>
-        public Dictionary<(int, int), NumericCell> NumericCells { get; internal set; } = new Dictionary<(int, int), NumericCell>();
+        public Dictionary<(int, int), NumericCell> NumericCells
+        {
+            get { return this.Sheet.NumericCells; }
+            internal set { this.Sheet.NumericCells = value ?? new Dictionary<(int, int), NumericCell>(); }
+        }
 
         /// <summary>
         /// The rows that are currently hidden (collapsed). While a row is hidden its height is
         /// zero, so it disappears from the sheet without renumbering the remaining rows.
         /// </summary>
-        public HashSet<int> HiddenRows { get; } = new HashSet<int>();
+        public HashSet<int> HiddenRows { get { return this.Sheet.HiddenRows; } }
 
         /// <summary>
         /// The columns that are currently hidden. While a column is hidden its width is zero, so
@@ -215,20 +331,24 @@ namespace Spreadalonia
         /// column are all skipped, and the neighbouring columns are drawn seamlessly next to each
         /// other.
         /// </summary>
-        public HashSet<int> HiddenColumns { get; } = new HashSet<int>();
+        public HashSet<int> HiddenColumns { get { return this.Sheet.HiddenColumns; } }
 
         /// <summary>
         /// The ranges that are read-only. Cells inside a read-only range cannot be edited, pasted
         /// into or cleared, but they can still be selected and copied.
         /// </summary>
-        public List<SelectionRange> ReadonlyRanges { get; } = new List<SelectionRange>();
+        public List<SelectionRange> ReadonlyRanges { get { return this.Sheet.ReadonlyRanges; } }
 
         /// <summary>
         /// Whether the table maintains <see cref="HiddenRows"/> itself when a <see cref="TreeGradeCell"/>
         /// toggle box is clicked. When this is <see langword="false"/> the <see cref="Spreadsheet.TreeExpand"/>
         /// event is raised but the host is responsible for calling <see cref="SetRowVisible"/>.
         /// </summary>
-        public bool AutoManageRows { get; set; } = true;
+        public bool AutoManageRows
+        {
+            get { return this.Sheet.AutoManageRows; }
+            set { this.Sheet.AutoManageRows = value; }
+        }
 
         private string _emptyNumericLinkText = "…";
 
@@ -247,26 +367,16 @@ namespace Spreadalonia
             set { _emptyNumericLinkText = value; this.InvalidateVisual(); }
         }
 
-        private List<CellBackground> _cellBackgrounds = new List<CellBackground>();
-
-        /// <summary>
-        /// The backgrounds to be applied to ranges of cells. Backgrounds are drawn below the grid lines.
-        /// </summary>
         public List<CellBackground> CellBackgrounds
         {
-            get { return _cellBackgrounds; }
-            set { _cellBackgrounds = value ?? new List<CellBackground>(); InvalidateVisual(); }
+            get { return this.Sheet.CellBackgrounds; }
+            set { this.Sheet.CellBackgrounds = value ?? new List<CellBackground>(); InvalidateVisual(); }
         }
 
-        private List<CellBorder> _cellBorders = new List<CellBorder>();
-
-        /// <summary>
-        /// The border line segments to be drawn on top of the grid lines.
-        /// </summary>
         public List<CellBorder> CellBorders
         {
-            get { return _cellBorders; }
-            set { _cellBorders = value ?? new List<CellBorder>(); InvalidateVisual(); }
+            get { return this.Sheet.CellBorders; }
+            set { this.Sheet.CellBorders = value ?? new List<CellBorder>(); InvalidateVisual(); }
         }
 
         /// <summary>
@@ -276,7 +386,7 @@ namespace Spreadalonia
         /// <param name="brush">The brush used to fill the background.</param>
         public void AddCellBackground(SelectionRange range, IBrush brush)
         {
-            _cellBackgrounds.Add(new CellBackground(range, brush));
+            this.Sheet.CellBackgrounds.Add(new CellBackground(range, brush));
             InvalidateVisual();
         }
 
@@ -285,7 +395,7 @@ namespace Spreadalonia
         /// </summary>
         public void ClearCellBackgrounds()
         {
-            _cellBackgrounds.Clear();
+            this.Sheet.CellBackgrounds.Clear();
             InvalidateVisual();
         }
 
@@ -297,7 +407,7 @@ namespace Spreadalonia
         {
             if (border != null)
             {
-                _cellBorders.Add(border);
+                this.Sheet.CellBorders.Add(border);
                 InvalidateVisual();
             }
         }
@@ -307,7 +417,7 @@ namespace Spreadalonia
         /// </summary>
         public void ClearCellBorders()
         {
-            _cellBorders.Clear();
+            this.Sheet.CellBorders.Clear();
             InvalidateVisual();
         }
 
@@ -336,8 +446,6 @@ namespace Spreadalonia
             set { SetValue(DefaultMarginProperty, value); }
         }
 
-        public static readonly StyledProperty<ImmutableList<SelectionRange>> MergedRangesProperty = AvaloniaProperty.Register<Table, ImmutableList<SelectionRange>>(nameof(MergedRanges), ImmutableList.Create<SelectionRange>());
-
         /// <summary>
         /// The ranges of cells that are merged together. The content of the top-left cell of each
         /// range is drawn centred over the whole merged range, and grid lines inside the merged
@@ -345,13 +453,13 @@ namespace Spreadalonia
         /// </summary>
         public ImmutableList<SelectionRange> MergedRanges
         {
-            get { return GetValue(MergedRangesProperty); }
-            set { SetValue(MergedRangesProperty, value ?? ImmutableList.Create<SelectionRange>()); }
+            get { return this.Sheet.MergedRanges; }
+            set { this.Sheet.MergedRanges = value ?? ImmutableList.Create<SelectionRange>(); this.InvalidateVisual(); }
         }
 
         static Table()
         {
-            AffectsRender<Table>(OffsetProperty, DefaultColumnWidthProperty, DefaultRowHeightProperty, GridColorProperty, SelectionProperty, ForegroundProperty, BackgroundProperty, FontFamilyProperty, FontSizeProperty, FontStyleProperty, FontWeightProperty, SelectionAccentProperty, IsFocusedProperty, DefaultMarginProperty, MergedRangesProperty);
+            AffectsRender<Table>(OffsetProperty, DefaultColumnWidthProperty, DefaultRowHeightProperty, GridColorProperty, SelectionProperty, ForegroundProperty, BackgroundProperty, FontFamilyProperty, FontSizeProperty, FontStyleProperty, FontWeightProperty, SelectionAccentProperty, IsFocusedProperty, DefaultMarginProperty);
         }
 
         protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
@@ -1094,8 +1202,8 @@ namespace Spreadalonia
         /// </summary>
         private const double MinimumScrollableArea = 40;
 
-        private int frozenColumnCount = 0;
-        private int frozenRowCount = 0;
+        // The frozen row / column counts live in the current worksheet (Sheet.FrozenRowCount and
+        // Sheet.FrozenColumnCount), so that every worksheet keeps its own frozen panes.
 
         private double frozenStripWidth = 0;
         private double frozenStripHeight = 0;
@@ -1120,14 +1228,14 @@ namespace Spreadalonia
         /// </summary>
         public int FrozenColumnCount
         {
-            get { return frozenColumnCount; }
+            get { return this.Sheet.FrozenColumnCount; }
             set
             {
                 int newValue = Math.Max(0, value);
 
-                if (frozenColumnCount != newValue)
+                if (this.Sheet.FrozenColumnCount != newValue)
                 {
-                    frozenColumnCount = newValue;
+                    this.Sheet.FrozenColumnCount = newValue;
                     this.InvalidateVisual();
                     this.InvalidateHeaders();
                 }
@@ -1142,14 +1250,14 @@ namespace Spreadalonia
         /// </summary>
         public int FrozenRowCount
         {
-            get { return frozenRowCount; }
+            get { return this.Sheet.FrozenRowCount; }
             set
             {
                 int newValue = Math.Max(0, value);
 
-                if (frozenRowCount != newValue)
+                if (this.Sheet.FrozenRowCount != newValue)
                 {
-                    frozenRowCount = newValue;
+                    this.Sheet.FrozenRowCount = newValue;
                     this.InvalidateVisual();
                     this.InvalidateHeaders();
                 }
@@ -1161,14 +1269,14 @@ namespace Spreadalonia
         /// </summary>
         private double ComputeFrozenWidth()
         {
-            if (frozenColumnCount <= 0)
+            if (this.Sheet.FrozenColumnCount <= 0)
             {
                 return 0;
             }
 
             double width = 0;
 
-            for (int i = 0; i < frozenColumnCount && i < MaxTableWidth; i++)
+            for (int i = 0; i < this.Sheet.FrozenColumnCount && i < MaxTableWidth; i++)
             {
                 width += GetWidth(i);
             }
@@ -1181,14 +1289,14 @@ namespace Spreadalonia
         /// </summary>
         private double ComputeFrozenHeight()
         {
-            if (frozenRowCount <= 0)
+            if (this.Sheet.FrozenRowCount <= 0)
             {
                 return 0;
             }
 
             double height = 0;
 
-            for (int i = 0; i < frozenRowCount && i < MaxTableHeight; i++)
+            for (int i = 0; i < this.Sheet.FrozenRowCount && i < MaxTableHeight; i++)
             {
                 height += GetHeight(i);
             }
@@ -1237,7 +1345,7 @@ namespace Spreadalonia
         /// </summary>
         internal bool IsColumnFrozen(int column)
         {
-            return frozenStripWidth > 0 && column >= 0 && column < frozenColumnCount;
+            return frozenStripWidth > 0 && column >= 0 && column < this.Sheet.FrozenColumnCount;
         }
 
         /// <summary>
@@ -1245,7 +1353,7 @@ namespace Spreadalonia
         /// </summary>
         internal bool IsRowFrozen(int row)
         {
-            return frozenStripHeight > 0 && row >= 0 && row < frozenRowCount;
+            return frozenStripHeight > 0 && row >= 0 && row < this.Sheet.FrozenRowCount;
         }
 
         /// <summary>
@@ -1291,7 +1399,7 @@ namespace Spreadalonia
             double x = screenX + 1;
             double curr = 0;
 
-            for (int i = 0; i < frozenColumnCount; i++)
+            for (int i = 0; i < this.Sheet.FrozenColumnCount; i++)
             {
                 // A hidden frozen column has a width of zero, so it can never contain the pointer.
                 curr += GetWidth(i);
@@ -1302,7 +1410,7 @@ namespace Spreadalonia
                 }
             }
 
-            return Math.Max(0, frozenColumnCount - 1);
+            return Math.Max(0, this.Sheet.FrozenColumnCount - 1);
         }
 
         /// <summary>
@@ -1313,7 +1421,7 @@ namespace Spreadalonia
             double y = screenY + 1;
             double curr = 0;
 
-            for (int i = 0; i < frozenRowCount; i++)
+            for (int i = 0; i < this.Sheet.FrozenRowCount; i++)
             {
                 curr += GetHeight(i);
 
@@ -1323,7 +1431,7 @@ namespace Spreadalonia
                 }
             }
 
-            return Math.Max(0, frozenRowCount - 1);
+            return Math.Max(0, this.Sheet.FrozenRowCount - 1);
         }
 
         /// <summary>
@@ -1576,13 +1684,84 @@ namespace Spreadalonia
         }
 
         /// <summary>
-        /// Checks whether a cell is part of one of the <see cref="ReadonlyRanges"/>.
+        /// Returns the right edge the text of a cell may be drawn up to when the worksheet lets long
+        /// texts spill over the empty cells that follow them: the right edge of the last empty
+        /// neighbour, or the right edge of the cell itself when the next one carries content.
+        /// </summary>
+        /// <param name="left">The index of the first drawn column of the region.</param>
+        /// <param name="row">The row of the cell.</param>
+        /// <param name="x">The index of the cell within the region.</param>
+        /// <param name="width">The number of drawn columns of the region.</param>
+        /// <param name="xs">The right edge of every drawn column, in region coordinates.</param>
+        private double GetOverflowRightEdge(int left, int row, int x, int width, double[] xs)
+        {
+            double right = xs[x];
+
+            for (int neighbour = x + 1; neighbour <= width && neighbour < xs.Length; neighbour++)
+            {
+                if (!IsCellAvailableForOverflow(left + neighbour, row))
+                {
+                    break;
+                }
+
+                right = xs[neighbour];
+            }
+
+            return right;
+        }
+
+        /// <summary>
+        /// Checks whether the text of a cell may spill into the specified cell: only a cell that is
+        /// empty (no data, no custom cell, not merged) and visible can be painted over.
+        /// </summary>
+        /// <param name="column">The column to paint over.</param>
+        /// <param name="row">The row to paint over.</param>
+        private bool IsCellAvailableForOverflow(int column, int row)
+        {
+            if (IsColumnHidden(column) || IsRowHidden(row))
+            {
+                return false;
+            }
+
+            if (Data.ContainsKey((column, row)) || FormulaCells.ContainsKey((column, row)) ||
+                TitleCells.ContainsKey((column, row)) || LinkCells.ContainsKey((column, row)) ||
+                ButtonCells.ContainsKey((column, row)) || TreeCells.ContainsKey((column, row)) ||
+                NumericCells.ContainsKey((column, row)))
+            {
+                return false;
+            }
+
+            if (MergedRanges != null)
+            {
+                foreach (SelectionRange mergedRange in MergedRanges)
+                {
+                    if (mergedRange != null && column >= mergedRange.Left && column <= mergedRange.Right && row >= mergedRange.Top && row <= mergedRange.Bottom)
+                    {
+                        return false;
+                    }
+                }
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// Checks whether a cell is part of one of the <see cref="ReadonlyRanges"/>, or belongs to a
+        /// worksheet that is read-only as a whole (<see cref="SpreadsheetSheet.IsReadOnly"/>).
         /// </summary>
         /// <param name="column">The column of the cell.</param>
         /// <param name="row">The row of the cell.</param>
         /// <returns><see langword="true"/> if the cell cannot be edited.</returns>
         public bool IsCellReadonly(int column, int row)
         {
+            // A worksheet that is read-only as a whole protects every one of its cells: the user
+            // cannot edit, paste into, cut or clear them, while the host application can still
+            // write them programmatically.
+            if (this.Sheet != null && this.Sheet.IsReadOnly)
+            {
+                return true;
+            }
+
             if (ReadonlyRanges == null || ReadonlyRanges.Count == 0)
             {
                 return false;
@@ -1959,6 +2138,10 @@ namespace Spreadalonia
 
                 if (Selection.Count == 1)
                 {
+                    // Dragging the border of a selection moves its content, unless the worksheet
+                    // forbids it: the border is then simply part of the selection.
+                    bool canMove = this.Sheet == null || this.Sheet.AllowDragMoveCells;
+
                     double selectionLeft = 0;
                     double selectionTop = 0;
                     double selectionRight = 0;
@@ -1971,8 +2154,8 @@ namespace Spreadalonia
                     selectionTop = GetSelectionRowEdge(Selection[0].Top, true);
                     selectionBottom = GetSelectionRowEdge(Selection[0].Bottom, false);
 
-                    bool found = (Math.Abs(xPos - selectionLeft) <= 3 && yPos >= selectionTop && yPos <= selectionBottom) || (Math.Abs(xPos - selectionRight) <= 3 && yPos >= selectionTop && yPos <= selectionBottom) ||
-                        (Math.Abs(yPos - selectionTop) <= 3 && xPos >= selectionLeft && xPos <= selectionRight) || (Math.Abs(yPos - selectionBottom) <= 3 && xPos >= selectionLeft && xPos <= selectionRight);
+                    bool found = canMove && ((Math.Abs(xPos - selectionLeft) <= 3 && yPos >= selectionTop && yPos <= selectionBottom) || (Math.Abs(xPos - selectionRight) <= 3 && yPos >= selectionTop && yPos <= selectionBottom) ||
+                        (Math.Abs(yPos - selectionTop) <= 3 && xPos >= selectionLeft && xPos <= selectionRight) || (Math.Abs(yPos - selectionBottom) <= 3 && xPos >= selectionLeft && xPos <= selectionRight));
 
                     bool isRows = Selection[0].IsRows(this);
                     bool isColumns = Selection[0].IsColumns(this);
@@ -2626,8 +2809,12 @@ namespace Spreadalonia
                 selectionTop = GetSelectionRowEdge(Selection[0].Top, true);
                 selectionBottom = GetSelectionRowEdge(Selection[0].Bottom, false);
 
-                moving = (Math.Abs(xPos - selectionLeft) <= 3 && yPos >= selectionTop && yPos <= selectionBottom) || (Math.Abs(xPos - selectionRight) <= 3 && yPos >= selectionTop && yPos <= selectionBottom) ||
-                    (Math.Abs(yPos - selectionTop) <= 3 && xPos >= selectionLeft && xPos <= selectionRight) || (Math.Abs(yPos - selectionBottom) <= 3 && xPos >= selectionLeft && xPos <= selectionRight);
+                // A worksheet can forbid the user from moving the content of a selection by dragging
+                // its border; the pointer then starts a new selection instead.
+                bool canMove = this.Sheet == null || this.Sheet.AllowDragMoveCells;
+
+                moving = canMove && ((Math.Abs(xPos - selectionLeft) <= 3 && yPos >= selectionTop && yPos <= selectionBottom) || (Math.Abs(xPos - selectionRight) <= 3 && yPos >= selectionTop && yPos <= selectionBottom) ||
+                    (Math.Abs(yPos - selectionTop) <= 3 && xPos >= selectionLeft && xPos <= selectionRight) || (Math.Abs(yPos - selectionBottom) <= 3 && xPos >= selectionLeft && xPos <= selectionRight));
 
                 bool isRows = Selection[0].IsRows(this);
                 bool isColumns = Selection[0].IsColumns(this);
@@ -3019,7 +3206,7 @@ namespace Spreadalonia
 
                 int frozenLeft = 0;
                 double frozenLeftDelta = 0;
-                int frozenColumnSpan = Math.Max(0, frozenColumnCount - 1);
+                int frozenColumnSpan = Math.Max(0, this.Sheet.FrozenColumnCount - 1);
 
                 if (frozenStripWidth > 0)
                 {
@@ -3028,7 +3215,7 @@ namespace Spreadalonia
 
                 int frozenTop = 0;
                 double frozenTopDelta = 0;
-                int frozenRowSpan = Math.Max(0, frozenRowCount - 1);
+                int frozenRowSpan = Math.Max(0, this.Sheet.FrozenRowCount - 1);
 
                 if (frozenStripHeight > 0)
                 {
@@ -3100,6 +3287,13 @@ namespace Spreadalonia
         {
             Pen gridPen = new Pen(new SolidColorBrush(GridColor));
                 Pen blackPen = new Pen(Brushes.Black);
+
+                // A worksheet can let a long text spill over the empty cells that follow it (the
+                // default is to clip it to its own cell) and ask for a focus rectangle instead of a
+                // filled selection.
+                bool allowTextOverflow = this.Sheet != null && this.Sheet.AllowTextOverflow;
+                bool fillSelection = this.Sheet == null || this.Sheet.SelectionStyle != SheetSelectionStyle.FocusRect;
+
                 Pen selectionPen = new Pen(SelectionAccent, 2);
                 Pen selectionMovePen = new Pen(SelectionAccent, 3);
                 Pen selectionWhitePen = new Pen(this.Background, 1);
@@ -3187,9 +3381,9 @@ namespace Spreadalonia
 
                         // Draw cell backgrounds on top of the grid lines (they are painted over the
                         // default grid, while explicitly defined borders are drawn on top of them)
-                        if (_cellBackgrounds.Count > 0)
+                        if (this.Sheet.CellBackgrounds.Count > 0)
                         {
-                            foreach (CellBackground cellBackground in _cellBackgrounds)
+                            foreach (CellBackground cellBackground in this.Sheet.CellBackgrounds)
                             {
                                 if (cellBackground == null || cellBackground.Brush == null)
                                 {
@@ -3526,7 +3720,11 @@ namespace Spreadalonia
                                             }
                                         }
 
-                                        using (context.PushClip(new Rect(realX + margin.Left, realY + margin.Top, xs[x] - realX - margin.Left - margin.Right, ys[y] - realY - margin.Top - margin.Bottom)))
+                                        double clipRight = allowTextOverflow && hor == TextAlignment.Left && activeNumericCell == null
+                                            ? GetOverflowRightEdge(left, top + y, x, width, xs)
+                                            : xs[x];
+
+                                        using (context.PushClip(new Rect(realX + margin.Left, realY + margin.Top, clipRight - realX - margin.Left - margin.Right, ys[y] - realY - margin.Top - margin.Bottom)))
                                         {
                                             if (ver == VerticalAlignment.Top)
                                             {
@@ -3811,9 +4009,9 @@ namespace Spreadalonia
                         }
 
                         // Draw borders on top of the grid lines
-                        if (_cellBorders.Count > 0)
+                        if (this.Sheet.CellBorders.Count > 0)
                         {
-                            foreach (CellBorder border in _cellBorders)
+                            foreach (CellBorder border in this.Sheet.CellBorders)
                             {
                                 if (border == null || border.Brush == null)
                                 {
@@ -3929,7 +4127,7 @@ namespace Spreadalonia
                                 topMargin = 2;
                             }
 
-                            if (!Container.IsEditing)
+                            if (!Container.IsEditing && fillSelection)
                             {
                                 using (context.PushClip(new Rect(-offsetX + 1, -offsetY + 1, this.Bounds.Width, this.Bounds.Height)))
                                 {
