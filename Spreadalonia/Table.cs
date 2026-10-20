@@ -3314,19 +3314,22 @@ namespace Spreadalonia
                     using (context.PushClip(new Rect(-offsetX + 1, -offsetY + 1, this.Bounds.Width, this.Bounds.Height)))
                     {
 
+                        // xs[x] is the right edge of the x-th drawn column (so xs[x - 1] is its left
+                        // edge, and xs[0] is the width of the first drawn column), and ys[y] is the
+                        // bottom edge of the y-th drawn row. The grid lines are therefore drawn at
+                        // xs[x - 1] / ys[y - 1] for the separator that follows column x - 1 / row
+                        // y - 1, which is the coordinate the drawing loops below use.
                         double currX = 0;
-                        xs[0] = 0;
-                        for (int x = 1; x <= width; x++)
+                        for (int x = 0; x <= width; x++)
                         {
-                            currX += GetWidth(left + x - 1);
+                            currX += GetWidth(left + x);
                             xs[x] = currX;
                         }
 
                         double currY = 0;
-                        ys[0] = 0;
-                        for (int y = 1; y <= height; y++)
+                        for (int y = 0; y <= height; y++)
                         {
-                            currY += GetHeight(top + y - 1);
+                            currY += GetHeight(top + y);
                             ys[y] = currY;
                         }
 
@@ -3347,13 +3350,17 @@ namespace Spreadalonia
                         }
 
 
-                        // Draw vertical grid lines, skipping the interior of merged ranges
+                        // Draw vertical grid lines, skipping the interior of merged ranges. The line
+                        // drawn at xs[x] is the separator that follows the (left + x)-th column: xs[x]
+                        // is the right edge of that column, so its separator index is left + x (and
+                        // not left + x - 1, which would shift every separator one column to the right
+                        // and leave the first column without a line).
                         for (int x = 0; x <= width; x++)
                         {
-                            if (x + left > 0)
-                            {
-                                int lineIndex = left + x - 1;
+                            int lineIndex = left + x;
 
+                            if (lineIndex > 0)
+                            {
                                 foreach ((int segmentStart, int segmentEnd) in GetVisibleLineSegments(top, top + height, lineIndex, false))
                                 {
                                     double lineY0 = segmentStart == top ? 0 : ys[segmentStart - top - 1];
@@ -3364,13 +3371,15 @@ namespace Spreadalonia
                             }
                         }
 
-                        // Draw horizontal grid lines, skipping the interior of merged ranges
+                        // Draw horizontal grid lines, skipping the interior of merged ranges. Same
+                        // reasoning as above: ys[y] is the bottom edge of the (top + y)-th row, so the
+                        // separator it carries is the one at index top + y.
                         for (int y = 0; y <= height; y++)
                         {
-                            if (y + top > 0)
-                            {
-                                int lineIndex = top + y - 1;
+                            int lineIndex = top + y;
 
+                            if (lineIndex > 0)
+                            {
                                 foreach ((int segmentStart, int segmentEnd) in GetVisibleLineSegments(left, left + width, lineIndex, true))
                                 {
                                     double lineX0 = segmentStart == left ? 0 : xs[segmentStart - left - 1];
