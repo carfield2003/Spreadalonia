@@ -724,6 +724,51 @@ namespace Demo
                 };
             }
 
+            // Diagnostic for the grid lines of the first row and column: an empty sheet and a sheet
+            // with content are rendered and the pixels along the expected separators are checked, so
+            // that a missing line can be reported without looking at the screenshot by hand.
+            if (Environment.GetCommandLineArgs().Any(a => a == "--grid-line-test"))
+            {
+                Opened += async (_, _) =>
+                {
+                    try
+                    {
+                        await System.Threading.Tasks.Task.Delay(500);
+
+                        SpreadsheetControl.MergedRanges = null;
+                        SpreadsheetControl.CellBackgrounds = null;
+                        SpreadsheetControl.CellBorders = null;
+                        SpreadsheetControl.UnfreezePanes();
+                        SpreadsheetControl.ClearContent();
+                        SpreadsheetControl.MaxTableWidth = 8;
+                        SpreadsheetControl.MaxTableHeight = 14;
+
+                        // 1) An empty sheet: every separator has to be drawn, the first ones included.
+                        await System.Threading.Tasks.Task.Delay(600);
+                        SaveScreenshot(@"C:\Users\89664\Desktop\grid_empty.png");
+                        CheckGridLines("empty");
+
+                        // 2) The same sheet with content in its first cells.
+                        SpreadsheetControl.SetData(SpreadsheetControl.CurrentSheet, new Dictionary<(int, int), string>
+                        {
+                            [(0, 0)] = "A1", [(1, 0)] = "B1", [(2, 0)] = "C1",
+                            [(0, 1)] = "A2", [(1, 1)] = "B2", [(2, 1)] = "C2"
+                        });
+                        await System.Threading.Tasks.Task.Delay(600);
+                        SaveScreenshot(@"C:\Users\89664\Desktop\grid_content.png");
+                        CheckGridLines("content");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[GridLine] EXCEPTION {ex}");
+                    }
+                    finally
+                    {
+                        Environment.Exit(0);
+                    }
+                };
+            }
+
             // Automated test for the per-worksheet display / interaction options: read-only, text
             // overflow, dragging cells and the style of the selection frame. Each option belongs to
             // one worksheet only.
@@ -1079,6 +1124,180 @@ namespace Demo
                     }
                 };
             }
+        }
+
+
+        /// <summary>
+        /// Renders the window and checks that every separator of the table is painted as a solid one
+        /// device pixel line. A line that straddles two device pixels (which happens on displays with a
+        /// fractional render scaling, e.g. 150%) is painted as two faint grey lines: it is still
+        /// "there", but it is far lighter than the grid colour, which is what made the first row and
+        /// column look like they had no separator at all.
+        /// </summary>
+        private void CheckGridLines(string label)
+        {
+            const int solidLimit = 235;   // #DCDCDC is 220: anything lighter than this is not a solid line
+
+            var bitmap = new Avalonia.Media.Imaging.RenderTargetBitmap(
+                new PixelSize((int)this.Bounds.Width, (int)this.Bounds.Height),
+                new Vector(96, 96));
+            bitmap.Render(this);
+
+            using (MemoryStream pixelStream = new MemoryStream())
+            {
+                bitmap.Save(pixelStream);
+                pixelStream.Position = 0;
+
+                using (var decoded = new Avalonia.Media.Imaging.Bitmap(pixelStream))
+                {
+                    int width = decoded.PixelSize.Width;
+                    int height = decoded.PixelSize.Height;
+                    int stride = width * 4;
+
+                    var buffer = new byte[stride * height];
+                    var handle = System.Runtime.InteropServices.GCHandle.Alloc(buffer, System.Runtime.InteropServices.GCHandleType.Pinned);
+
+                    try
+                    {
+                        decoded.CopyPixels(new PixelRect(decoded.PixelSize), handle.AddrOfPinnedObject(), buffer.Length, stride);
+                    }
+                    finally
+                    {
+                        handle.Free();
+                    }
+
+                    double scaling = this.RenderScaling;
+                    double rowHeight = SpreadsheetControl.DefaultRowHeight * scaling;
+                    double columnWidth = SpreadsheetControl.DefaultColumnWidth * scaling;
+
+                    Point controlOrigin = SpreadsheetControl.TranslatePoint(new Point(0, 0), this) ?? new Point(0, 0);
+                    int cellTop = (int)Math.Round((controlOrigin.Y + 27) * scaling);
+                    int cellLeft = (int)Math.Round((controlOrigin.X + 41) * scaling);
+
+                    // Locate the top edge of the table: the first solid line below the column header.
+                    int tableTop = -1;
+
+                    for (int y = cellTop; y < Math.Min(height, cellTop + 3 * rowHeight) && tableTop < 0; y++)
+                    {
+                        if (IsSolidGray(buffer, stride, (int)(cellLeft + columnWidth * 0.5), y))
+                        {
+                            tableTop = y;
+                        }
+                    }
+
+                    if (tableTop < 0)
+                    {
+                        Console.WriteLine($"[GridLine] {label}: no horizontal grid line found below the column header");
+                        Console.WriteLine($"[GridLine] {label}: RESULT FAIL");
+                        return;
+                    }
+
+                    // Locate the left edge of the table the same way, on a row that is not a separator.
+                    int sampleY = tableTop + (int)(rowHeight * 0.5);
+                    int tableLeft = -1;
+
+                    for (int x = cellLeft; x < Math.Min(width, cellLeft + 3 * columnWidth) && tableLeft < 0; x++)
+                    {
+                        if (IsSolidGray(buffer, stride, x, sampleY))
+                        {
+                            tableLeft = x;
+                        }
+                    }
+
+                    if (tableLeft < 0)
+                    {
+                        Console.WriteLine($"[GridLine] {label}: no vertical grid line found right of the row header");
+                        Console.WriteLine($"[GridLine] {label}: RESULT FAIL");
+                        return;
+                    }
+
+                    // The first line found is the separator after the first column / row.
+                    tableLeft -= (int)Math.Round(columnWidth);
+                    tableTop -= (int)Math.Round(rowHeight);
+
+                    int failures = 0;
+
+                    // Every column separator is expected one column width apart from the first one, and
+                    // it has to be a fully opaque grid pixel somewhere in its two device pixel band.
+                    int firstSeparatorX = tableLeft + (int)Math.Round(columnWidth);
+                    int sampleX = tableLeft + (int)(columnWidth * 0.5);
+
+                    for (int offset = 0; offset < 5; offset++)
+                    {
+                        int x = firstSeparatorX + (int)Math.Round(columnWidth * offset);
+
+                        if (!HasSolidLineNear(buffer, stride, width, height, x, sampleY, 2, (int)(rowHeight / 2)))
+                        {
+                            Console.WriteLine($"[GridLine] {label}: separator after column {offset} is missing or too faint (x≈{x}, sample y={sampleY})");
+                            failures++;
+                        }
+                    }
+
+                    int firstSeparatorY = tableTop + (int)Math.Round(rowHeight);
+
+                    for (int offset = 0; offset < 6; offset++)
+                    {
+                        int y = firstSeparatorY + (int)Math.Round(rowHeight * offset);
+
+                        if (!HasSolidLineNear(buffer, stride, width, height, sampleX, y, (int)(columnWidth / 2), 2))
+                        {
+                            Console.WriteLine($"[GridLine] {label}: separator after row {offset} is missing or too faint (y≈{y}, sample x={sampleX})");
+                            failures++;
+                        }
+                    }
+
+                    Console.WriteLine($"[GridLine] {label}: RESULT {(failures == 0 ? "PASS" : "FAIL")} ({failures} missing)");
+                }
+            }
+        }
+
+        /// <summary>
+        /// Checks whether a solid grid line pixel is found within the specified band around a point.
+        /// </summary>
+        private static bool HasSolidLineNear(byte[] buffer, int stride, int width, int height, int x, int y, int spanX, int spanY)
+        {
+            for (int dx = -spanX; dx <= spanX; dx++)
+            {
+                for (int dy = -spanY; dy <= spanY; dy++)
+                {
+                    if (IsSolidGray(buffer, stride, x + dx, y + dy, width, height))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Checks whether the pixel is a grid line pixel that is solid enough to be seen (the grid
+        /// colour is #DCDCDC; a line split over two device pixels is much lighter than that).
+        /// </summary>
+        private static bool IsSolidGray(byte[] buffer, int stride, int x, int y)
+        {
+            return IsSolidGray(buffer, stride, x, y, stride / 4, buffer.Length / stride);
+        }
+
+        private static bool IsSolidGray(byte[] buffer, int stride, int x, int y, int width, int height)
+        {
+            if (x < 0 || y < 0 || x >= width || y >= height)
+            {
+                return false;
+            }
+
+            int i = y * stride + x * 4;
+
+            if (i + 3 >= buffer.Length)
+            {
+                return false;
+            }
+
+            // Grey, and not lighter than the solid grid colour: the grid is #DCDCDC (220), a line that
+            // straddles two device pixels comes out at about 240.
+            return Math.Abs(buffer[i + 2] - buffer[i + 1]) <= 3
+                && Math.Abs(buffer[i + 1] - buffer[i]) <= 3
+                && buffer[i] <= 235;
         }
 
         private void SaveScreenshot(string path)

@@ -1684,6 +1684,57 @@ namespace Spreadalonia
         }
 
         /// <summary>
+        /// The render scaling of the visual root (1, 1.25, 1.5, ...), or 1 while the control is not
+        /// attached to a window.
+        /// </summary>
+        private double RenderScale
+        {
+            get
+            {
+                TopLevel root = TopLevel.GetTopLevel(this);
+
+                return root != null && root.RenderScaling > 0 ? root.RenderScaling : 1;
+            }
+        }
+
+        /// <summary>
+        /// Snaps the coordinate of a one device pixel grid line to the centre of the nearest device
+        /// pixel. With a fractional render scaling (e.g. 1.5 on a 150% display) a one DIP wide line
+        /// covers one and a half device pixels and ends up as two faint lines, which makes the
+        /// separator look missing; drawing it one device pixel wide and centred on a device pixel
+        /// keeps it crisp at every scaling.
+        /// </summary>
+        /// <param name="value">The coordinate, in the (already transformed) drawing context.</param>
+        private double SnapGridLine(double value)
+        {
+            double scaling = this.RenderScale;
+
+            // The line is drawn inside a context that already carries a transform (the scroll offset
+            // applied by RenderRegion, plus the position of the table inside the window). Snapping has
+            // to happen in device coordinates, otherwise a window whose origin falls on a half pixel
+            // keeps producing lines that straddle two device pixels.
+            double offset = this.gridSnapOffset;
+
+            double device = (value + offset) * scaling;
+
+            return (Math.Floor(device) + 0.5) / scaling - offset;
+        }
+
+        /// <summary>
+        /// The part of the drawing transform that a grid separator coordinate is measured from, so
+        /// that <see cref="SnapGridLine"/> can align it to a device pixel of the window (it holds the
+        /// X component while the vertical separators are drawn and the Y component while the
+        /// horizontal ones are).
+        /// </summary>
+        private double gridSnapOffset;
+
+        /// <summary>
+        /// Whether the separators that are currently being drawn are vertical (their coordinate varies
+        /// along X) - used by <see cref="SnapGridLine"/> to pick the right component of the transform.
+        /// </summary>
+        private bool isRenderingHorizontally;
+
+        /// <summary>
         /// Returns the right edge the text of a cell may be drawn up to when the worksheet lets long
         /// texts spill over the empty cells that follow them: the right edge of the last empty
         /// neighbour, or the right edge of the cell itself when the next one carries content.
@@ -3285,7 +3336,11 @@ namespace Spreadalonia
         /// <param name="frozenRows"><see langword="true"/> when the region draws the frozen row strip.</param>
         private void RenderRegion(DrawingContext context, int left, int top, int width, int height, double offsetX, double offsetY, Rect region, bool isMainRegion, bool frozenColumns, bool frozenRows)
         {
-            Pen gridPen = new Pen(new SolidColorBrush(GridColor));
+            // The grid lines are drawn at least two device pixels wide. With a fractional render
+            // scaling (150%, 125%, ...) a hairlinethin pen is split over two device pixels and each
+            // half ends up far too faint, which makes the separators look missing; a two device pixel
+            // line always paints at least one full device pixel whatever the sub-pixel phase is.
+            Pen gridPen = new Pen(new SolidColorBrush(GridColor), 2 / this.RenderScale);
                 Pen blackPen = new Pen(Brushes.Black);
 
                 // A worksheet can let a long text spill over the empty cells that follow it (the
@@ -3350,43 +3405,53 @@ namespace Spreadalonia
                         }
 
 
-                        // Draw vertical grid lines, skipping the interior of merged ranges. The line
-                        // drawn at xs[x] is the separator that follows the (left + x)-th column: xs[x]
-                        // is the right edge of that column, so its separator index is left + x (and
-                        // not left + x - 1, which would shift every separator one column to the right
-                        // and leave the first column without a line).
+                        // Draw the vertical grid lines, skipping the interior of the merged ranges.
+                        // xs[x] is the right edge of the (left + x)-th column, i.e. the separator that
+                        // follows that column, whose index is exactly left + x. Every separator of the
+                        // region has to be drawn, the one after the first column (x = 0) included: the
+                        // left outer edge of the table is not part of this loop, so there is nothing to
+                        // skip here.
+                        this.isRenderingHorizontally = true;
+                        this.gridSnapOffset = offsetX + (this.TransformToVisual(TopLevel.GetTopLevel(this)) is Matrix xTransform ? xTransform.M31 : 0);
+
                         for (int x = 0; x <= width; x++)
                         {
                             int lineIndex = left + x;
 
-                            if (lineIndex > 0)
+                            foreach ((int segmentStart, int segmentEnd) in GetVisibleLineSegments(top, top + height, lineIndex, false))
                             {
-                                foreach ((int segmentStart, int segmentEnd) in GetVisibleLineSegments(top, top + height, lineIndex, false))
-                                {
-                                    double lineY0 = segmentStart == top ? 0 : ys[segmentStart - top - 1];
-                                    double lineY1 = segmentEnd == top + height ? ys[height] : ys[segmentEnd - top];
+                                double lineY0 = segmentStart == top ? 0 : ys[segmentStart - top - 1];
+                                double lineY1 = segmentEnd == top + height ? ys[height] : ys[segmentEnd - top];
 
-                                    context.DrawLine(gridPen, new Point(xs[x], lineY0).SnapToDevicePixels(this), new Point(xs[x], lineY1).SnapToDevicePixels(this));
-                                }
+                                // The separators are drawn through the helpers below rather than with
+                                // SnapToDevicePixels: the drawing context already carries the scroll
+                                // transform, so snapping the two end points independently can round a
+                                // separator to two different device pixels and paint it as two half
+                                // transparent lines instead of one visible one.
+                                double lineX = SnapGridLine(xs[x]);
+
+                                context.DrawLine(gridPen, new Point(lineX, lineY0), new Point(lineX, lineY1));
                             }
                         }
 
-                        // Draw horizontal grid lines, skipping the interior of merged ranges. Same
-                        // reasoning as above: ys[y] is the bottom edge of the (top + y)-th row, so the
-                        // separator it carries is the one at index top + y.
+                        // Same reasoning for the horizontal grid lines: ys[y] is the bottom edge of the
+                        // (top + y)-th row, i.e. the separator at index top + y, and every one of them
+                        // has to be drawn.
+                        this.isRenderingHorizontally = false;
+                        this.gridSnapOffset = offsetY + (this.TransformToVisual(TopLevel.GetTopLevel(this)) is Matrix yTransform ? yTransform.M32 : 0);
+
                         for (int y = 0; y <= height; y++)
                         {
                             int lineIndex = top + y;
 
-                            if (lineIndex > 0)
+                            foreach ((int segmentStart, int segmentEnd) in GetVisibleLineSegments(left, left + width, lineIndex, true))
                             {
-                                foreach ((int segmentStart, int segmentEnd) in GetVisibleLineSegments(left, left + width, lineIndex, true))
-                                {
-                                    double lineX0 = segmentStart == left ? 0 : xs[segmentStart - left - 1];
-                                    double lineX1 = segmentEnd == left + width ? xs[width] : xs[segmentEnd - left];
+                                double lineX0 = segmentStart == left ? 0 : xs[segmentStart - left - 1];
+                                double lineX1 = segmentEnd == left + width ? xs[width] : xs[segmentEnd - left];
 
-                                    context.DrawLine(gridPen, new Point(lineX0, ys[y]).SnapToDevicePixels(this), new Point(lineX1, ys[y]).SnapToDevicePixels(this));
-                                }
+                                double lineY = SnapGridLine(ys[y]);
+
+                                context.DrawLine(gridPen, new Point(lineX0, lineY), new Point(lineX1, lineY));
                             }
                         }
 
