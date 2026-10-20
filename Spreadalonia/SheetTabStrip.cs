@@ -197,7 +197,10 @@ namespace Spreadalonia
                 return;
             }
 
-            this.outerBorder.Background = container.SheetTabBackground ?? new SolidColorBrush(container.HeaderBackground);
+            // Keep the strip close to the classic Excel tab bar: a neutral grey rail with
+            // individually separated tabs. Hosts can still override all of these brushes through
+            // the public SheetTab* properties.
+            this.outerBorder.Background = container.SheetTabBackground ?? new SolidColorBrush(Color.FromRgb(242, 242, 242));
             this.outerBorder.BorderBrush = container.SheetTabBorderBrush ?? new SolidColorBrush(container.GridColor);
 
             this.newSheetButton.IsVisible = container.SheetTabNewButtonVisible && container.SheetTabAllowInsert;
@@ -228,12 +231,7 @@ namespace Spreadalonia
                 return;
             }
 
-            IBrush selectedBackground = container.SheetTabSelectedBackground;
-
-            if (selectedBackground == null && container.SelectionAccent != null)
-            {
-                selectedBackground = new SolidColorBrush(container.SelectionAccent.Color, 0.25);
-            }
+            IBrush selectedBackground = container.SheetTabSelectedBackground ?? new SolidColorBrush(Colors.White);
 
             for (int i = 0; i < this.tabButtons.Count; i++)
             {
@@ -244,7 +242,9 @@ namespace Spreadalonia
 
                 if (selected)
                 {
-                    button.Background = selectedBackground;
+                    button.Background = selectedBackground ?? new SolidColorBrush(Colors.White);
+                    button.BorderBrush = new SolidColorBrush(Color.FromRgb(33, 115, 70));
+                    button.BorderThickness = new Thickness(1, 1, 1, 2);
                     button.FontWeight = FontWeight.Bold;
                 }
                 else
@@ -253,6 +253,8 @@ namespace Spreadalonia
                     // theme keeps painting the hover state of the button.
                     button.ClearValue(Button.BackgroundProperty);
                     button.ClearValue(Button.FontWeightProperty);
+                    button.BorderBrush = container.SheetTabBorderBrush ?? new SolidColorBrush(container.GridColor);
+                    button.BorderThickness = new Thickness(0, 1, 1, 0);
                 }
 
                 // A hidden worksheet that is shown anyway (because it is the current one, or because
@@ -297,7 +299,7 @@ namespace Spreadalonia
                 MinHeight = 0,
                 Padding = new Thickness(0),
                 CornerRadius = new CornerRadius(0),
-                BorderThickness = new Thickness(0, 0, 1, 0),
+                BorderThickness = new Thickness(0, 1, 1, 0),
                 BorderBrush = container.SheetTabBorderBrush ?? new SolidColorBrush(container.GridColor),
                 VerticalAlignment = global::Avalonia.Layout.VerticalAlignment.Stretch,
                 HorizontalContentAlignment = global::Avalonia.Layout.HorizontalAlignment.Stretch,
@@ -339,21 +341,21 @@ namespace Spreadalonia
 
             ContextMenu menu = new ContextMenu();
 
-            MenuItem renameItem = new MenuItem() { Header = "Rename", IsEnabled = container.SheetTabAllowRename };
+            MenuItem renameItem = new MenuItem() { Header = "重命名", IsEnabled = container.SheetTabAllowRename };
             renameItem.Click += (s, e) => this.BeginRename(sheet);
             menu.Items.Add(renameItem);
 
-            MenuItem deleteItem = new MenuItem() { Header = "Delete", IsEnabled = container.SheetTabAllowDelete && container.Sheets.Count > 1 };
+            MenuItem deleteItem = new MenuItem() { Header = "删除", IsEnabled = container.SheetTabAllowDelete && container.Sheets.Count > 1 };
             deleteItem.Click += (s, e) => container.RemoveSheet(sheet);
             menu.Items.Add(deleteItem);
 
             menu.Items.Add(new Separator());
 
-            MenuItem moveLeftItem = new MenuItem() { Header = "Move left", IsEnabled = container.SheetTabAllowReorder && sheet.Index > 0 };
+            MenuItem moveLeftItem = new MenuItem() { Header = "向左移动", IsEnabled = container.SheetTabAllowReorder && sheet.Index > 0 };
             moveLeftItem.Click += (s, e) => container.MoveSheet(sheet, sheet.Index - 1);
             menu.Items.Add(moveLeftItem);
 
-            MenuItem moveRightItem = new MenuItem() { Header = "Move right", IsEnabled = container.SheetTabAllowReorder && sheet.Index < container.Sheets.Count - 1 };
+            MenuItem moveRightItem = new MenuItem() { Header = "向右移动", IsEnabled = container.SheetTabAllowReorder && sheet.Index < container.Sheets.Count - 1 };
             moveRightItem.Click += (s, e) => container.MoveSheet(sheet, sheet.Index + 1);
             menu.Items.Add(moveRightItem);
 

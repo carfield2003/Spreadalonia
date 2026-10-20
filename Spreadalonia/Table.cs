@@ -3315,16 +3315,18 @@ namespace Spreadalonia
                     {
 
                         double currX = 0;
-                        for (int x = 0; x <= width; x++)
+                        xs[0] = 0;
+                        for (int x = 1; x <= width; x++)
                         {
-                            currX += GetWidth(left + x);
+                            currX += GetWidth(left + x - 1);
                             xs[x] = currX;
                         }
 
                         double currY = 0;
-                        for (int y = 0; y <= height; y++)
+                        ys[0] = 0;
+                        for (int y = 1; y <= height; y++)
                         {
-                            currY += GetHeight(top + y);
+                            currY += GetHeight(top + y - 1);
                             ys[y] = currY;
                         }
 
