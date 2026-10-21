@@ -667,12 +667,32 @@ SpreadsheetControl.CurrentSheetIndex = hidden.Index;   // 代码仍可切过去
 | `SheetTabAllowInsert`          | `bool`   | `true` | 允许从页签插入工作表            |
 | `SheetTabAllowReorder`         | `bool`   | `true` | 允许拖拽页签调整顺序            |
 | `SheetTabHeight`               | `double` | `28`   | 页签栏高度                 |
-| `SheetTabBackground`           | `IBrush` | `null` | 页签栏背景（`null` 跟随主题）     |
-| `SheetTabForeground`           | `IBrush` | `null` | 页签文字颜色                 |
-| `SheetTabSelectedBackground`   | `IBrush` | `null` | 选中页签背景                 |
-| `SheetTabBorderBrush`          | `IBrush` | `null` | 页签边框颜色                 |
+| `SheetTabBackground`           | `IBrush` | `null` | 页签栏背景（`null` 时为 `#F0F0F0`） |
+| `SheetTabForeground`           | `IBrush` | `null` | 未选中页签的文字颜色（`null` 跟随主题）|
+| `SheetTabSelectedBackground`   | `IBrush` | `null` | 选中页签背景（`null` 时取 `SpreadsheetBackground`）|
+| `SheetTabBorderBrush`          | `IBrush` | `null` | 页签之间分隔线与页签栏边框颜色（`null` 时为 `GridColor`）|
+| `SheetTabSelectedForeground`   | `IBrush` | `null` | 选中页签的文字颜色（`null` 时取 `SheetTabForeground`）|
+| `SheetTabActiveBorderBrush`    | `IBrush` | `null` | 选中页签的边框颜色（`null` 时取 `SelectionAccent`）|
+| `SheetTabActiveBorderThickness`| `double` | `1`    | 选中页签边框粗细               |
+| `SheetTabFontFamily`           | `FontFamily` | `Default` | 页签字体族              |
+| `SheetTabFontSize`             | `double` | `13`   | 页签字号                   |
+| `SheetTabActiveFontWeight`     | `FontWeight` | `Normal` | 选中页签字重            |
+| `SheetTabPadding`              | `Thickness` | `9,0,9,0` | 页签内边距             |
+| `SheetTabMaxWidth`             | `double` | `160`  | 页签文字最大宽度（超出省略，完整名在 Tooltip 中）|
 
 > 单表且 `SheetTabVisibleWhenSingle = false` 时页签栏高度为 0、不占位。
+>
+> 选中页签的边框是**三边闭合、上边开口**（`左/右/下`），上边与表格内容区连通，且底色取 `SpreadsheetBackground`，因此看起来是内容区的一部分而非独立按钮。
+>
+> 以上属性均为 StyledProperty，可在 XAML 中直接赋值或绑定；修改后页签栏立即重绘（修改 `SpreadsheetBackground` 同样生效）。
+
+```xml
+<spreadalonia:Spreadsheet SheetTabHeight="30"
+                          SheetTabFontSize="14"
+                          SheetTabActiveBorderBrush="#0078D7"
+                          SheetTabActiveFontWeight="Bold"
+                          SheetTabSelectedForeground="#0B5CAB" />
+```
 
 ### 每表交互开关
 

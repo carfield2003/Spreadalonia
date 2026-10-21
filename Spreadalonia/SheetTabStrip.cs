@@ -84,9 +84,20 @@ namespace Spreadalonia
         /// The brush used to frame the tab of the displayed worksheet (the accent colour of the
         /// spreadsheet, so that it matches the selection frame).
         /// </summary>
-        private IBrush ActiveTabBrush => this.Container != null && this.Container.SelectionAccent != null
-            ? this.Container.SelectionAccent
-            : new SolidColorBrush(Color.FromRgb(0, 120, 215));
+        private IBrush ActiveTabBrush
+        {
+            get
+            {
+                if (this.Container == null)
+                {
+                    return new SolidColorBrush(Color.FromRgb(0, 120, 215));
+                }
+
+                return this.Container.SheetTabActiveBorderBrush
+                    ?? this.Container.SelectionAccent
+                    ?? new SolidColorBrush(Color.FromRgb(0, 120, 215));
+            }
+        }
 
         /// <summary>
         /// Create a new <see cref="SheetTabStrip"/>.
@@ -148,7 +159,10 @@ namespace Spreadalonia
             Grid.SetColumn(this.scroller, 1);
             Grid.SetColumn(this.newSheetButton, 2);
 
-            this.outerBorder.BorderThickness = new Thickness(0, 1, 0, 0);
+            // No line of its own at the top of the strip: the scroll bar above it already separates it
+            // from the cells, and the tab that is being displayed has to reach the cells without a
+            // stray line crossing its open top edge.
+            this.outerBorder.BorderThickness = new Thickness(0);
             this.outerBorder.Child = this.layout;
 
             this.Content = this.outerBorder;
@@ -270,9 +284,17 @@ namespace Spreadalonia
             }
 
             IBrush railBrush = container.SheetTabBackground ?? new SolidColorBrush(Color.FromRgb(240, 240, 240));
-            IBrush selectedBackground = container.SheetTabSelectedBackground ?? new SolidColorBrush(Colors.White);
             IBrush separatorBrush = container.SheetTabBorderBrush ?? new SolidColorBrush(container.GridColor);
             IBrush activeBrush = this.ActiveTabBrush;
+            IBrush cellBackground = container.SpreadsheetBackground ?? new SolidColorBrush(Colors.White);
+
+            // The tab of the displayed worksheet is painted with the colour of the cells and framed on
+            // its left, right and bottom edges only: its top edge is open, so that the tab looks like
+            // it grows out of the sheet instead of being a button sitting in the strip.
+            IBrush selectedBackground = container.SheetTabSelectedBackground ?? cellBackground;
+
+            double frameThickness = Math.Max(0, container.SheetTabActiveBorderThickness);
+            Thickness tabPadding = container.SheetTabPadding;
 
             for (int i = 0; i < this.tabButtons.Count; i++)
             {
@@ -283,26 +305,34 @@ namespace Spreadalonia
 
                 if (selected)
                 {
-                    // The displayed worksheet gets a white tab framed in the accent colour, so that it
-                    // stands out against the grey rail without every tab looking like a button. The
-                    // frame hugs the label instead of spanning the height of the rail, like the tab bar
-                    // of the reference application.
-                    tab.Background = selectedBackground ?? new SolidColorBrush(Colors.White);
+                    tab.Background = selectedBackground;
                     tab.BorderBrush = activeBrush;
-                    tab.BorderThickness = new Thickness(1);
-                    tab.Margin = new Thickness(2, 2, 2, 2);
-                    tab.Padding = new Thickness(6, 0);
+                    tab.BorderThickness = new Thickness(frameThickness, 0, frameThickness, frameThickness);
+                    tab.Margin = new Thickness(0);
+                    tab.Padding = tabPadding;
+
+                    if (tab.Child is TextBlock activeText)
+                    {
+                        activeText.FontWeight = container.SheetTabActiveFontWeight;
+                        SetTabForeground(activeText, container.SheetTabSelectedForeground ?? container.SheetTabForeground);
+                    }
                 }
                 else
                 {
                     tab.Background = Brushes.Transparent;
                     tab.BorderBrush = separatorBrush;
-                    tab.Margin = new Thickness(0, 2, 0, 2);
-                    tab.Padding = new Thickness(9, 0);
+                    tab.Margin = new Thickness(0);
+                    tab.Padding = tabPadding;
+
+                    if (tab.Child is TextBlock text)
+                    {
+                        text.FontWeight = FontWeight.Normal;
+                        SetTabForeground(text, container.SheetTabForeground);
+                    }
 
                     // The separator sits between two neighbouring tabs: the first tab has none on its
-                    // left, and neither the tab on the left nor the one on the right of the selected
-                    // tab draw theirs, so the frame of the selected tab is not doubled.
+                    // left, and the tab on the left of the selected one does not draw the separator
+                    // that would otherwise be doubled by the frame of the selected tab.
                     SpreadsheetSheet previous = i > 0 ? this.tabSheets[i - 1] : null;
 
                     bool separator = i > 0 && previous != container.CurrentSheet && sheet != container.CurrentSheet;
@@ -325,6 +355,25 @@ namespace Spreadalonia
         }
 
         /// <summary>
+        /// Applies the requested foreground to the label of a tab. When no brush is given the value
+        /// is cleared, so that the theme paints the text instead of leaving it without a brush (which
+        /// would make the label invisible).
+        /// </summary>
+        /// <param name="text">The label of the tab.</param>
+        /// <param name="brush">The brush to use, or <see langword="null"/> to follow the theme.</param>
+        private static void SetTabForeground(TextBlock text, IBrush brush)
+        {
+            if (brush != null)
+            {
+                text.Foreground = brush;
+            }
+            else
+            {
+                text.ClearValue(TextBlock.ForegroundProperty);
+            }
+        }
+
+        /// <summary>
         /// Creates the tab of a worksheet: a plain text label on the rail, like the tab bar of a
         /// classic spreadsheet application. It is a <see cref="Border"/> rather than a
         /// <see cref="Button"/> so that it carries no hover / press visuals of its own.
@@ -337,9 +386,11 @@ namespace Spreadalonia
             TextBlock text = new TextBlock()
             {
                 Text = sheet.Name,
-                MaxWidth = 160,
+                MaxWidth = container.SheetTabMaxWidth,
                 TextTrimming = TextTrimming.CharacterEllipsis,
                 TextWrapping = TextWrapping.NoWrap,
+                FontFamily = container.SheetTabFontFamily,
+                FontSize = container.SheetTabFontSize,
                 VerticalAlignment = global::Avalonia.Layout.VerticalAlignment.Center
             };
 
@@ -351,9 +402,13 @@ namespace Spreadalonia
             Border tab = new Border()
             {
                 Child = text,
-                Padding = new Thickness(7, 0),
+                Padding = container.SheetTabPadding,
                 Background = Brushes.Transparent,
                 BorderThickness = new Thickness(0),
+
+                // The tab spans the whole height of the strip so that its frame reaches the cells
+                // above it: an open top edge only looks like the tab is part of the sheet when there
+                // is no gap between the two.
                 VerticalAlignment = global::Avalonia.Layout.VerticalAlignment.Stretch,
                 Tag = sheet,
                 Cursor = new Cursor(StandardCursorType.Hand)

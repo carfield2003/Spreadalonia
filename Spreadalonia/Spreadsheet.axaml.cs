@@ -539,6 +539,125 @@ namespace Spreadalonia
         }
 
         /// <summary>
+        /// Defines the <see cref="SheetTabSelectedForeground"/> property.
+        /// </summary>
+        public static readonly StyledProperty<IBrush> SheetTabSelectedForegroundProperty = AvaloniaProperty.Register<Spreadsheet, IBrush>(nameof(SheetTabSelectedForeground), null);
+
+        /// <summary>
+        /// The brush used to paint the name of the worksheet on the tab that is being displayed. When
+        /// it is <see langword="null"/> (the default) <see cref="SheetTabForeground"/> is used.
+        /// </summary>
+        public IBrush SheetTabSelectedForeground
+        {
+            get { return GetValue(SheetTabSelectedForegroundProperty); }
+            set { SetValue(SheetTabSelectedForegroundProperty, value); }
+        }
+
+        /// <summary>
+        /// Defines the <see cref="SheetTabActiveBorderBrush"/> property.
+        /// </summary>
+        public static readonly StyledProperty<IBrush> SheetTabActiveBorderBrushProperty = AvaloniaProperty.Register<Spreadsheet, IBrush>(nameof(SheetTabActiveBorderBrush), null);
+
+        /// <summary>
+        /// The brush used to frame the tab of the worksheet that is being displayed. When it is
+        /// <see langword="null"/> (the default) <see cref="SelectionAccent"/> is used, so that the
+        /// frame of the tab matches the frame of the selection.
+        /// </summary>
+        public IBrush SheetTabActiveBorderBrush
+        {
+            get { return GetValue(SheetTabActiveBorderBrushProperty); }
+            set { SetValue(SheetTabActiveBorderBrushProperty, value); }
+        }
+
+        /// <summary>
+        /// Defines the <see cref="SheetTabActiveBorderThickness"/> property.
+        /// </summary>
+        public static readonly StyledProperty<double> SheetTabActiveBorderThicknessProperty = AvaloniaProperty.Register<Spreadsheet, double>(nameof(SheetTabActiveBorderThickness), 1);
+
+        /// <summary>
+        /// The thickness of the frame around the tab of the worksheet that is being displayed. The
+        /// frame is always open on the side that faces the cells (the top edge of the strip), so that
+        /// the tab looks like it is part of the sheet rather than a button sitting in the strip.
+        /// </summary>
+        public double SheetTabActiveBorderThickness
+        {
+            get { return GetValue(SheetTabActiveBorderThicknessProperty); }
+            set { SetValue(SheetTabActiveBorderThicknessProperty, value); }
+        }
+
+        /// <summary>
+        /// Defines the <see cref="SheetTabFontFamily"/> property.
+        /// </summary>
+        public static readonly StyledProperty<FontFamily> SheetTabFontFamilyProperty = AvaloniaProperty.Register<Spreadsheet, FontFamily>(nameof(SheetTabFontFamily), FontFamily.Default);
+
+        /// <summary>
+        /// The font family of the text of the worksheet tabs.
+        /// </summary>
+        public FontFamily SheetTabFontFamily
+        {
+            get { return GetValue(SheetTabFontFamilyProperty); }
+            set { SetValue(SheetTabFontFamilyProperty, value); }
+        }
+
+        /// <summary>
+        /// Defines the <see cref="SheetTabFontSize"/> property.
+        /// </summary>
+        public static readonly StyledProperty<double> SheetTabFontSizeProperty = AvaloniaProperty.Register<Spreadsheet, double>(nameof(SheetTabFontSize), 13);
+
+        /// <summary>
+        /// The font size of the text of the worksheet tabs, in device independent pixels.
+        /// </summary>
+        public double SheetTabFontSize
+        {
+            get { return GetValue(SheetTabFontSizeProperty); }
+            set { SetValue(SheetTabFontSizeProperty, value); }
+        }
+
+        /// <summary>
+        /// Defines the <see cref="SheetTabActiveFontWeight"/> property.
+        /// </summary>
+        public static readonly StyledProperty<FontWeight> SheetTabActiveFontWeightProperty = AvaloniaProperty.Register<Spreadsheet, FontWeight>(nameof(SheetTabActiveFontWeight), FontWeight.Normal);
+
+        /// <summary>
+        /// The weight of the text of the tab that is being displayed.
+        /// </summary>
+        public FontWeight SheetTabActiveFontWeight
+        {
+            get { return GetValue(SheetTabActiveFontWeightProperty); }
+            set { SetValue(SheetTabActiveFontWeightProperty, value); }
+        }
+
+        /// <summary>
+        /// Defines the <see cref="SheetTabPadding"/> property.
+        /// </summary>
+        public static readonly StyledProperty<Thickness> SheetTabPaddingProperty = AvaloniaProperty.Register<Spreadsheet, Thickness>(nameof(SheetTabPadding), new Thickness(9, 0, 9, 0));
+
+        /// <summary>
+        /// The padding around the text of the worksheet tabs: the horizontal components separate the
+        /// names from the separators and from the frame of the tab that is being displayed.
+        /// </summary>
+        public Thickness SheetTabPadding
+        {
+            get { return GetValue(SheetTabPaddingProperty); }
+            set { SetValue(SheetTabPaddingProperty, value); }
+        }
+
+        /// <summary>
+        /// Defines the <see cref="SheetTabMaxWidth"/> property.
+        /// </summary>
+        public static readonly StyledProperty<double> SheetTabMaxWidthProperty = AvaloniaProperty.Register<Spreadsheet, double>(nameof(SheetTabMaxWidth), 160);
+
+        /// <summary>
+        /// The maximum width of the text of a worksheet tab. A longer name is trimmed with an
+        /// ellipsis; the full name is always available in the tooltip of the tab.
+        /// </summary>
+        public double SheetTabMaxWidth
+        {
+            get { return GetValue(SheetTabMaxWidthProperty); }
+            set { SetValue(SheetTabMaxWidthProperty, value); }
+        }
+
+        /// <summary>
         /// Raised when a worksheet has been removed from the spreadsheet.
         /// </summary>
         public event EventHandler<SheetEventArgs> SheetRemoved;
@@ -2574,7 +2693,16 @@ namespace Spreadalonia
                 || change.Property == SheetTabBackgroundProperty
                 || change.Property == SheetTabForegroundProperty
                 || change.Property == SheetTabSelectedBackgroundProperty
-                || change.Property == SheetTabBorderBrushProperty)
+                || change.Property == SheetTabBorderBrushProperty
+                || change.Property == SheetTabSelectedForegroundProperty
+                || change.Property == SheetTabActiveBorderBrushProperty
+                || change.Property == SheetTabActiveBorderThicknessProperty
+                || change.Property == SheetTabFontFamilyProperty
+                || change.Property == SheetTabFontSizeProperty
+                || change.Property == SheetTabActiveFontWeightProperty
+                || change.Property == SheetTabPaddingProperty
+                || change.Property == SheetTabMaxWidthProperty
+                || change.Property == GridBackgroundProperty)
             {
                 this.RefreshSheetTabs();
             }
