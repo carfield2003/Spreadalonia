@@ -473,8 +473,10 @@ namespace Demo
                             && SpreadsheetControl.CurrentSheet == original;
                         Console.WriteLine($"[SheetTab] 3-sheet visible: visible={SpreadsheetControl.SheetTabStripControlInternal.IsVisible} tabs={SpreadsheetControl.SheetTabStripControlInternal.TabButtons.Count} current='{SpreadsheetControl.CurrentSheet.Name}' -> {(visibleOk ? "PASS" : "FAIL")}");
 
-                        // 3) Click the second tab to switch to "B" -> the tab selection must follow.
-                        SpreadsheetControl.SheetTabStripControlInternal.TabButtons[1].RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Avalonia.Controls.Button.ClickEvent));
+                        // 3) Click the second tab to switch to "B" -> the tab selection must follow. The
+                        // tabs are plain Borders with a pointer handler (no Button.Click), so the press
+                        // and the release are simulated explicitly.
+                        SimulateTabClick(SpreadsheetControl.SheetTabStripControlInternal.TabButtons[1]);
                         await System.Threading.Tasks.Task.Delay(100);
                         bool clickOk = SpreadsheetControl.CurrentSheetIndex == 1
                             && SpreadsheetControl.CurrentSheet.Name == "B";
@@ -520,7 +522,7 @@ namespace Demo
 
                         // 6) Rename / delete / move from the API.
                         string newName = SpreadsheetControl.RenameSheet(SpreadsheetControl.Sheets[2], "Budget");
-                        string tabText = (SpreadsheetControl.SheetTabStripControlInternal.TabButtons[2].Content as TextBlock)?.Text;
+                        string tabText = (SpreadsheetControl.SheetTabStripControlInternal.TabButtons[2].Child as TextBlock)?.Text;
                         bool renameOk = newName == "Budget" && SpreadsheetControl.Sheets[2].Name == "Budget" && tabText == "Budget";
                         Console.WriteLine($"[SheetTab] rename: name='{newName}' tab='{tabText}' -> {(renameOk ? "PASS" : "FAIL")}");
 
@@ -1298,6 +1300,18 @@ namespace Demo
             return Math.Abs(buffer[i + 2] - buffer[i + 1]) <= 3
                 && Math.Abs(buffer[i + 1] - buffer[i]) <= 3
                 && buffer[i] <= 235;
+        }
+
+        /// <summary>
+        /// Simulates a left button press and release on a worksheet tab, which is a plain
+        /// <see cref="Border"/> with pointer handlers rather than a <see cref="Button"/>.
+        /// </summary>
+        private static void SimulateTabClick(Border tab)
+        {
+            Point position = new Point(tab.Bounds.Width / 2, tab.Bounds.Height / 2);
+
+            tab.RaiseEvent(new PointerPressedEventArgs(tab, null, tab, position, 0, new PointerPointProperties(RawInputModifiers.LeftMouseButton, PointerUpdateKind.LeftButtonPressed), KeyModifiers.None));
+            tab.RaiseEvent(new PointerReleasedEventArgs(tab, null, tab, position, 0, new PointerPointProperties(RawInputModifiers.None, PointerUpdateKind.LeftButtonReleased), KeyModifiers.None, MouseButton.Left));
         }
 
         private void SaveScreenshot(string path)

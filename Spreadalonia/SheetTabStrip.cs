@@ -34,9 +34,11 @@ namespace Spreadalonia
     /// from its context menu when the corresponding <see cref="Spreadsheet"/> option is enabled.
     /// </summary>
     /// <remarks>
-    /// The strip is built out of plain Avalonia controls (a <see cref="ScrollViewer"/> holding a
-    /// horizontal <see cref="StackPanel"/> of <see cref="Button"/>s), so it follows the theme and the
-    /// dark / light mode of the host application.
+    /// The strip looks like the tab bar of a classic spreadsheet application: a plain rail with a row
+    /// of text tabs that sit next to each other, separated by a thin vertical line, the tab of the
+    /// displayed worksheet being framed. The tabs are plain <see cref="Border"/> controls with a
+    /// <see cref="TextBlock"/>, so they have no button hover / press visuals of their own and the look
+    /// is entirely decided by the <c>SheetTab*</c> properties of the <see cref="Spreadsheet"/>.
     /// </remarks>
     public class SheetTabStrip : UserControl
     {
@@ -57,7 +59,7 @@ namespace Spreadalonia
         /// <summary>
         /// The tabs that are currently shown, in the same order as the worksheets they stand for.
         /// </summary>
-        internal IReadOnlyList<Button> TabButtons => this.tabButtons;
+        internal IReadOnlyList<Border> TabButtons => this.tabButtons;
 
         /// <summary>
         /// The worksheets behind <see cref="TabButtons"/>.
@@ -72,11 +74,19 @@ namespace Spreadalonia
         private readonly Button scrollRightButton;
         private readonly Button newSheetButton;
 
-        private readonly List<Button> tabButtons = new List<Button>();
+        private readonly List<Border> tabButtons = new List<Border>();
         private readonly List<SpreadsheetSheet> tabSheets = new List<SpreadsheetSheet>();
 
         private TextBox renameBox;
         private SpreadsheetSheet renameSheet;
+
+        /// <summary>
+        /// The brush used to frame the tab of the displayed worksheet (the accent colour of the
+        /// spreadsheet, so that it matches the selection frame).
+        /// </summary>
+        private IBrush ActiveTabBrush => this.Container != null && this.Container.SelectionAccent != null
+            ? this.Container.SelectionAccent
+            : new SolidColorBrush(Color.FromRgb(0, 120, 215));
 
         /// <summary>
         /// Create a new <see cref="SheetTabStrip"/>.
@@ -94,27 +104,49 @@ namespace Spreadalonia
 
             this.scroller.PointerWheelChanged += this.Scroller_PointerWheelChanged;
 
-            this.scrollLeftButton = CreateToolButton("<");
-            this.scrollRightButton = CreateToolButton(">");
+            this.scrollLeftButton = CreateToolButton("\u25C0");
+            this.scrollRightButton = CreateToolButton("\u25B6");
             this.newSheetButton = CreateToolButton("+");
 
-            this.scrollLeftButton.Click += (s, e) => this.ScrollBy(-80);
-            this.scrollRightButton.Click += (s, e) => this.ScrollBy(80);
+            this.scrollLeftButton.Click += (s, e) => this.ScrollBy(-200);
+            this.scrollRightButton.Click += (s, e) => this.ScrollBy(200);
             this.newSheetButton.Click += (s, e) => this.Container?.AddSheet(null);
+
+            ToolTip.SetTip(this.scrollLeftButton, "向左滚动工作表标签");
+            ToolTip.SetTip(this.scrollRightButton, "向右滚动工作表标签");
+            ToolTip.SetTip(this.newSheetButton, "新建工作表");
+
+            // The two arrows sit next to each other at the left edge of the strip, like the tab
+            // navigation buttons of the classic spreadsheet applications, and the tabs take the rest
+            // of the row.
+            Border arrowBox = new Border()
+            {
+                BorderThickness = new Thickness(0, 0, 1, 0),
+                VerticalAlignment = global::Avalonia.Layout.VerticalAlignment.Stretch,
+                Child = new StackPanel()
+                {
+                    Orientation = Orientation.Horizontal,
+                    VerticalAlignment = global::Avalonia.Layout.VerticalAlignment.Stretch,
+                    Children =
+                    {
+                        this.scrollLeftButton,
+                        this.scrollRightButton
+                    }
+                }
+            };
+
+            this.arrowBox = arrowBox;
 
             this.layout.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
             this.layout.ColumnDefinitions.Add(new ColumnDefinition(new GridLength(1, GridUnitType.Star)));
             this.layout.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
-            this.layout.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
 
-            this.layout.Children.Add(this.scrollLeftButton);
+            this.layout.Children.Add(arrowBox);
             this.layout.Children.Add(this.scroller);
-            this.layout.Children.Add(this.scrollRightButton);
             this.layout.Children.Add(this.newSheetButton);
 
             Grid.SetColumn(this.scroller, 1);
-            Grid.SetColumn(this.scrollRightButton, 2);
-            Grid.SetColumn(this.newSheetButton, 3);
+            Grid.SetColumn(this.newSheetButton, 2);
 
             this.outerBorder.BorderThickness = new Thickness(0, 1, 0, 0);
             this.outerBorder.Child = this.layout;
@@ -127,6 +159,8 @@ namespace Spreadalonia
             this.Focusable = false;
         }
 
+        private readonly Border arrowBox;
+
         /// <summary>
         /// Creates one of the small buttons at the two ends of the strip (the scroll arrows and the
         /// "new worksheet" button).
@@ -137,12 +171,14 @@ namespace Spreadalonia
             Button button = new Button()
             {
                 Content = text,
-                Width = 24,
+                Width = 22,
                 MinWidth = 0,
                 MinHeight = 0,
                 Padding = new Thickness(0),
                 CornerRadius = new CornerRadius(0),
                 BorderThickness = new Thickness(0),
+                Background = Brushes.Transparent,
+                FontSize = 9,
                 VerticalAlignment = global::Avalonia.Layout.VerticalAlignment.Stretch,
                 VerticalContentAlignment = global::Avalonia.Layout.VerticalAlignment.Center,
                 HorizontalContentAlignment = global::Avalonia.Layout.HorizontalAlignment.Center,
@@ -197,11 +233,13 @@ namespace Spreadalonia
                 return;
             }
 
-            // Keep the strip close to the classic Excel tab bar: a neutral grey rail with
-            // individually separated tabs. Hosts can still override all of these brushes through
-            // the public SheetTab* properties.
-            this.outerBorder.Background = container.SheetTabBackground ?? new SolidColorBrush(Color.FromRgb(242, 242, 242));
+            // The rail is a light grey band; the tabs themselves are not separated by frames, only by
+            // a thin vertical line, and the tab of the displayed worksheet is framed. Hosts can still
+            // override all of these brushes through the public SheetTab* properties.
+            this.outerBorder.Background = container.SheetTabBackground ?? new SolidColorBrush(Color.FromRgb(240, 240, 240));
             this.outerBorder.BorderBrush = container.SheetTabBorderBrush ?? new SolidColorBrush(container.GridColor);
+
+            this.arrowBox.BorderBrush = container.SheetTabBorderBrush ?? new SolidColorBrush(container.GridColor);
 
             this.newSheetButton.IsVisible = container.SheetTabNewButtonVisible && container.SheetTabAllowInsert;
 
@@ -210,9 +248,9 @@ namespace Spreadalonia
 
             foreach (SpreadsheetSheet sheet in this.tabSheets)
             {
-                Button button = CreateTabButton(sheet);
-                this.tabButtons.Add(button);
-                this.tabsPanel.Children.Add(button);
+                Border tab = this.CreateTabButton(sheet);
+                this.tabButtons.Add(tab);
+                this.tabsPanel.Children.Add(tab);
             }
 
             this.UpdateSelection();
@@ -231,36 +269,53 @@ namespace Spreadalonia
                 return;
             }
 
+            IBrush railBrush = container.SheetTabBackground ?? new SolidColorBrush(Color.FromRgb(240, 240, 240));
             IBrush selectedBackground = container.SheetTabSelectedBackground ?? new SolidColorBrush(Colors.White);
+            IBrush separatorBrush = container.SheetTabBorderBrush ?? new SolidColorBrush(container.GridColor);
+            IBrush activeBrush = this.ActiveTabBrush;
 
             for (int i = 0; i < this.tabButtons.Count; i++)
             {
-                Button button = this.tabButtons[i];
+                Border tab = this.tabButtons[i];
                 SpreadsheetSheet sheet = this.tabSheets[i];
 
                 bool selected = sheet == container.CurrentSheet;
 
                 if (selected)
                 {
-                    button.Background = selectedBackground ?? new SolidColorBrush(Colors.White);
-                    button.BorderBrush = new SolidColorBrush(Color.FromRgb(33, 115, 70));
-                    button.BorderThickness = new Thickness(1, 1, 1, 2);
-                    button.FontWeight = FontWeight.Bold;
+                    // The displayed worksheet gets a white tab framed in the accent colour, so that it
+                    // stands out against the grey rail without every tab looking like a button. The
+                    // frame hugs the label instead of spanning the height of the rail, like the tab bar
+                    // of the reference application.
+                    tab.Background = selectedBackground ?? new SolidColorBrush(Colors.White);
+                    tab.BorderBrush = activeBrush;
+                    tab.BorderThickness = new Thickness(1);
+                    tab.Margin = new Thickness(2, 2, 2, 2);
+                    tab.Padding = new Thickness(6, 0);
                 }
                 else
                 {
-                    // The background is cleared instead of being set to transparent, so that the
-                    // theme keeps painting the hover state of the button.
-                    button.ClearValue(Button.BackgroundProperty);
-                    button.ClearValue(Button.FontWeightProperty);
-                    button.BorderBrush = container.SheetTabBorderBrush ?? new SolidColorBrush(container.GridColor);
-                    button.BorderThickness = new Thickness(0, 1, 1, 0);
+                    tab.Background = Brushes.Transparent;
+                    tab.BorderBrush = separatorBrush;
+                    tab.Margin = new Thickness(0, 2, 0, 2);
+                    tab.Padding = new Thickness(9, 0);
+
+                    // The separator sits between two neighbouring tabs: the first tab has none on its
+                    // left, and neither the tab on the left nor the one on the right of the selected
+                    // tab draw theirs, so the frame of the selected tab is not doubled.
+                    SpreadsheetSheet previous = i > 0 ? this.tabSheets[i - 1] : null;
+
+                    bool separator = i > 0 && previous != container.CurrentSheet && sheet != container.CurrentSheet;
+
+                    tab.BorderThickness = separator ? new Thickness(1, 0, 0, 0) : new Thickness(0);
                 }
 
                 // A hidden worksheet that is shown anyway (because it is the current one, or because
                 // the host wants to see it) is dimmed.
-                button.Opacity = sheet.IsHidden ? 0.6 : 1;
+                tab.Opacity = sheet.IsHidden ? 0.55 : 1;
             }
+
+            this.tabsPanel.Background = railBrush;
 
             Dispatcher.UIThread.Post(() =>
             {
@@ -270,10 +325,12 @@ namespace Spreadalonia
         }
 
         /// <summary>
-        /// Creates the tab of a worksheet.
+        /// Creates the tab of a worksheet: a plain text label on the rail, like the tab bar of a
+        /// classic spreadsheet application. It is a <see cref="Border"/> rather than a
+        /// <see cref="Button"/> so that it carries no hover / press visuals of its own.
         /// </summary>
         /// <param name="sheet">The worksheet the tab stands for.</param>
-        private Button CreateTabButton(SpreadsheetSheet sheet)
+        private Border CreateTabButton(SpreadsheetSheet sheet)
         {
             Spreadsheet container = this.Container;
 
@@ -283,7 +340,6 @@ namespace Spreadalonia
                 MaxWidth = 160,
                 TextTrimming = TextTrimming.CharacterEllipsis,
                 TextWrapping = TextWrapping.NoWrap,
-                Margin = new Thickness(8, 0),
                 VerticalAlignment = global::Avalonia.Layout.VerticalAlignment.Center
             };
 
@@ -292,42 +348,57 @@ namespace Spreadalonia
                 text.Foreground = container.SheetTabForeground;
             }
 
-            Button button = new Button()
+            Border tab = new Border()
             {
-                Content = text,
-                MinWidth = 0,
-                MinHeight = 0,
-                Padding = new Thickness(0),
-                CornerRadius = new CornerRadius(0),
-                BorderThickness = new Thickness(0, 1, 1, 0),
-                BorderBrush = container.SheetTabBorderBrush ?? new SolidColorBrush(container.GridColor),
+                Child = text,
+                Padding = new Thickness(7, 0),
+                Background = Brushes.Transparent,
+                BorderThickness = new Thickness(0),
                 VerticalAlignment = global::Avalonia.Layout.VerticalAlignment.Stretch,
-                HorizontalContentAlignment = global::Avalonia.Layout.HorizontalAlignment.Stretch,
-                VerticalContentAlignment = global::Avalonia.Layout.VerticalAlignment.Center,
-                Focusable = false,
-                IsTabStop = false,
-                Tag = sheet
+                Tag = sheet,
+                Cursor = new Cursor(StandardCursorType.Hand)
             };
 
-            ToolTip.SetTip(button, sheet.Name);
+            ToolTip.SetTip(tab, sheet.Name);
 
-            button.Click += (s, e) =>
+            // A Border has no Click event: the tab is switched on release, but only when the press
+            // started on the same tab, so that a drag that happens to end over a tab does not switch
+            // the worksheet by accident.
+            SpreadsheetSheet pressedSheet = null;
+
+            tab.PointerPressed += (s, e) =>
             {
-                if (this.Container != null)
+                if (e.GetCurrentPoint(tab).Properties.IsLeftButtonPressed)
                 {
-                    this.Container.CurrentSheetIndex = sheet.Index;
+                    pressedSheet = sheet;
                 }
             };
 
-            button.DoubleTapped += (s, e) =>
+            tab.PointerReleased += (s, e) =>
+            {
+                if (e.GetCurrentPoint(tab).Properties.PointerUpdateKind == PointerUpdateKind.LeftButtonReleased && pressedSheet == sheet)
+                {
+                    pressedSheet = null;
+                    e.Handled = true;
+
+                    if (this.Container != null)
+                    {
+                        this.Container.CurrentSheetIndex = sheet.Index;
+                    }
+                }
+            };
+
+            tab.PointerExited += (s, e) => pressedSheet = null;
+
+            tab.DoubleTapped += (s, e) =>
             {
                 this.BeginRename(sheet);
                 e.Handled = true;
             };
 
-            button.ContextMenu = this.CreateTabContextMenu(sheet);
+            tab.ContextMenu = this.CreateTabContextMenu(sheet);
 
-            return button;
+            return tab;
         }
 
         /// <summary>
@@ -386,10 +457,10 @@ namespace Spreadalonia
             TextBox box = new TextBox()
             {
                 Text = sheet.Name,
-                Width = Math.Max(60, this.tabButtons[index].Bounds.Width),
+                Width = Math.Max(64, this.tabButtons[index].Bounds.Width),
                 MinWidth = 0,
                 MinHeight = 0,
-                Padding = new Thickness(4, 0),
+                Padding = new Thickness(3, 0),
                 VerticalAlignment = global::Avalonia.Layout.VerticalAlignment.Center,
                 CornerRadius = new CornerRadius(0)
             };
