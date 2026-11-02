@@ -3,3 +3,5 @@
 */obj
 nuget-output
 artifacts
+
+nupkg/

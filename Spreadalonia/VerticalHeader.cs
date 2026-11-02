@@ -167,6 +167,7 @@ namespace Spreadalonia
                 {
                     this.Container.UndoStackRowHeight.Push(new ValueStackFrame<int, double>(this.Container.Selection, new Dictionary<int, Reference<double>>() { { selectionStartRow, wasOriginalRowHeightDefault ? null : new Reference<double>(originalRowHeight) } }, new Dictionary<int, Reference<double>>() { { selectionStartRow, newHeight } }));
                     this.Container.UndoStack.Push(null);
+                    this.Container.PushExtraCellStackNull();
 
                     this.Container.UndoStackRowForeground.Push(null);
                     this.Container.UndoStackRowTypeface.Push(null);
@@ -414,6 +415,7 @@ namespace Spreadalonia
 
                     this.Container.UndoStackRowHeight.Push(new ValueStackFrame<int, double>(this.Container.Selection, new Dictionary<int, Reference<double>>() { { clickedRow, wasDefault ? null : new Reference<double>(originalHeight) } }, new Dictionary<int, Reference<double>>() { { clickedRow, maxHeight } }));
                     this.Container.UndoStack.Push(null);
+                    this.Container.PushExtraCellStackNull();
 
                     this.Container.UndoStackRowForeground.Push(null);
                     this.Container.UndoStackRowTypeface.Push(null);
@@ -443,6 +445,7 @@ namespace Spreadalonia
 
                     this.Container.UndoStackRowHeight.Push(new ValueStackFrame<int, double>(this.Container.Selection, new Dictionary<int, Reference<double>>() { { clickedRow, originalHeight } }, new Dictionary<int, Reference<double>>() { { clickedRow, null } }));
                     this.Container.UndoStack.Push(null);
+                    this.Container.PushExtraCellStackNull();
 
                     this.Container.UndoStackRowForeground.Push(null);
                     this.Container.UndoStackRowTypeface.Push(null);
