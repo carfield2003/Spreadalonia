@@ -436,6 +436,205 @@ namespace Demo
                 };
             }
 
+            // Acceptance test for the accounting report designer requirements (R1..R6): formulas with
+            // numeric formatting, the formula read / write API, the new built-in functions, the
+            // recalculation before export, the row / column events and the programmatic row overloads.
+            if (Environment.GetCommandLineArgs().Any(a => a == "--report-test"))
+            {
+                Opened += async (_, _) =>
+                {
+                    string xlsxPath = Path.Combine(Path.GetTempPath(), "spreadalonia_report_test.xlsx");
+
+                    try
+                    {
+                        await System.Threading.Tasks.Task.Delay(500);
+
+                        SpreadsheetControl.MergedRanges = null;
+                        SpreadsheetControl.CellBackgrounds = null;
+                        SpreadsheetControl.CellBorders = null;
+                        SpreadsheetControl.NumericCells?.Clear();
+                        SpreadsheetControl.ClearContent();
+                        SpreadsheetControl.MaxTableWidth = 8;
+                        SpreadsheetControl.MaxTableHeight = 20;
+
+                        SpreadsheetSheet sheet = SpreadsheetControl.CurrentSheet;
+
+                        // ---- R1: a formula cell that carries a NumericCell ----
+                        SpreadsheetControl.SetData(sheet, new Dictionary<(int, int), string>
+                        {
+                            [(0, 0)] = "100",     // A1
+                            [(0, 1)] = "2",       // A2
+                            [(1, 0)] = "=A1/A2"   // B1
+                        });
+
+                        SpreadsheetControl.NumericCells[(1, 0)] = new NumericCell(2);
+
+                        // A formula that returns text must not be formatted.
+                        SpreadsheetControl.SetData(sheet, new Dictionary<(int, int), string> { [(2, 0)] = "=IF(A1>0,\"有\",\"无\")" });
+                        SpreadsheetControl.NumericCells[(2, 0)] = new NumericCell(2);
+
+                        Spreadalonia.Formula.CellData b1 = Spreadsheet.GetCellData(sheet, 1, 0);
+                        string b1Text = SpreadsheetControl.NumericCells[(1, 0)].GetDisplayText(b1.DisplayText);
+                        bool numericFormatOk = b1Text == "50.00";
+                        Console.WriteLine($"[Report] R1 numeric formula: DisplayText='{b1.DisplayText}' formatted='{b1Text}' -> {(numericFormatOk ? "PASS" : "FAIL")}");
+
+                        Spreadalonia.Formula.CellData c1 = Spreadsheet.GetCellData(sheet, 2, 0);
+                        bool textFormulaOk = c1.DisplayText == "有" && c1.ValueType != Spreadalonia.Formula.CellType.Number;
+                        Console.WriteLine($"[Report] R1 text formula: DisplayText='{c1.DisplayText}' type={c1.ValueType} -> {(textFormulaOk ? "PASS" : "FAIL")}");
+
+                        // ---- R1 export: the formula is a live formula with a number format ----
+                        using (FileStream output = File.Create(xlsxPath))
+                        {
+                            SpreadsheetControl.SaveXlsx(output, ImmutableList.Create(sheet), new XlsxExportOptions { ExportFormulas = true });
+                        }
+
+                        bool exportOk;
+                        using (var workbook = new ClosedXML.Excel.XLWorkbook(xlsxPath))
+                        {
+                            ClosedXML.Excel.IXLWorksheet imported = workbook.Worksheet(1);
+                            string formulaA1 = imported.Cell(1, 2).FormulaA1;
+                            string numberFormat = imported.Cell(1, 2).Style.NumberFormat.Format;
+                            exportOk = formulaA1.Replace("=", "") == "A1/A2" && numberFormat == "#,##0.00";
+                            Console.WriteLine($"[Report] R1 export: FormulaA1='{formulaA1}' NumberFormat='{numberFormat}' -> {(exportOk ? "PASS" : "FAIL")}");
+                        }
+
+                        // ---- R2: formula read / write API ----
+                        string readFormula = SpreadsheetControl.GetFormula(sheet, 1, 0);
+                        SpreadsheetControl.SetFormula(sheet, 3, 0, "A1*A2");   // no leading '='
+                        bool setOk = SpreadsheetControl.GetFormula(sheet, 3, 0) == "A1*A2";
+                        double setValue = Convert.ToDouble(Spreadsheet.GetCellData(sheet, 3, 0).CachedValue);
+
+                        SpreadsheetControl.SetFormula(sheet, 4, 0, "=A1+A2");
+                        bool setWithEqualsOk = SpreadsheetControl.GetFormula(sheet, 4, 0) == "A1+A2";
+
+                        bool formulaApiOk = readFormula == "A1/A2" && setOk && setWithEqualsOk && setValue == 200;
+                        Console.WriteLine($"[Report] R2 GetFormula='{readFormula}' SetFormula(no '=')='{SpreadsheetControl.GetFormula(sheet, 3, 0)}' value={setValue} SetFormula('=')='{SpreadsheetControl.GetFormula(sheet, 4, 0)}' -> {(formulaApiOk ? "PASS" : "FAIL")}");
+
+                        // ---- R3: the added built-in functions ----
+                        var functionCases = new (string Formula, double Expected)[]
+                        {
+                            ("FLOOR(2.7)", 2),
+                            ("FLOOR(2.7,0.5)", 2.5),
+                            ("CEILING(2.1)", 3),
+                            ("CEILING(2.1,0.5)", 2.5),
+                            ("ROUNDUP(2.11,1)", 2.2),
+                            ("ROUNDDOWN(2.19,1)", 2.1),
+                            ("MOD(7,3)", 1),
+                            ("INT(-2.1)", -3),
+                            ("IFERROR(1/0,99)", 99),
+                        };
+
+                        bool functionsOk = true;
+
+                        for (int i = 0; i < functionCases.Length; i++)
+                        {
+                            (string formula, double expected) = functionCases[i];
+                            int row = 6 + i;
+
+                            SpreadsheetControl.SetFormula(sheet, 0, row, formula);
+                            Spreadalonia.Formula.CellData data = Spreadsheet.GetCellData(sheet, 0, row);
+
+                            double actual = data.CachedValue is double value ? value : double.NaN;
+                            bool ok = Math.Abs(actual - expected) < 1e-9;
+                            functionsOk &= ok;
+
+                            Console.WriteLine($"[Report] R3 {formula} = {actual} (expected {expected}) -> {(ok ? "PASS" : "FAIL")}");
+                        }
+
+                        // SUMIF / COUNTIF receive their range already flattened by the engine, so they
+                        // are checked through the function registry with an explicit list.
+                        object countIfResult = SpreadsheetControl.FormulaEngine.Functions.Call("COUNTIF", new List<object> { new List<object> { 1.0, 5.0, 12.0 }, ">4" });
+                        bool countIfOk = Convert.ToDouble(countIfResult) == 2;
+
+                        object sumIfResult = SpreadsheetControl.FormulaEngine.Functions.Call("SUMIF", new List<object> { new List<object> { "北", "南", "北" }, "北", new List<object> { 10.0, 20.0, 5.0 } });
+                        bool sumIfOk = Convert.ToDouble(sumIfResult) == 15;
+
+                        bool conditionalOk = countIfOk && sumIfOk;
+                        Console.WriteLine($"[Report] R3 COUNTIF({{1,5,12}},\">4\") = {countIfResult}, SUMIF({{北,南,北}},\"北\",{{10,20,5}}) = {sumIfResult} -> {(conditionalOk ? "PASS" : "FAIL")}");
+
+                        // ---- R4: recalculation before export ----
+                        SpreadsheetControl.SetData(sheet, new Dictionary<(int, int), string> { [(0, 0)] = "200" });
+
+                        string exportValue;
+                        using (var stream = new MemoryStream())
+                        {
+                            SpreadsheetControl.SaveXlsx(stream, ImmutableList.Create(sheet), new XlsxExportOptions { ExportFormulas = false });
+                            stream.Position = 0;
+
+                            using (var workbook = new ClosedXML.Excel.XLWorkbook(stream))
+                            {
+                                exportValue = workbook.Worksheet(1).Cell(1, 2).GetFormattedString();
+                            }
+                        }
+
+                        // B1 carries a NumericCell with two decimals, so the exported value is expected
+                        // to be formatted as "100.00" (and to be the recalculated 100, not the stale 50).
+                        bool recalcOk = exportValue.Replace(",", "") == "100.00";
+                        Console.WriteLine($"[Report] R4 export after data change (A1=200, B1=A1/A2): B1={exportValue} -> {(recalcOk ? "PASS" : "FAIL")}");
+
+                        // ---- R5: row / column events ----
+                        int rowsInserted = -1, rowsInsertedCount = -1, rowsDeleted = -1, colsInserted = -1, colsDeleted = -1;
+
+                        SpreadsheetControl.RowsInserted += (s, e) => { rowsInserted = e.StartIndex; rowsInsertedCount = e.Count; };
+                        SpreadsheetControl.RowsDeleted += (s, e) => rowsDeleted = e.StartIndex;
+                        SpreadsheetControl.ColumnsInserted += (s, e) => colsInserted = e.StartIndex;
+                        SpreadsheetControl.ColumnsDeleted += (s, e) => colsDeleted = e.StartIndex;
+
+                        SpreadsheetControl.InsertRows(sheet, 3, 2);
+                        bool insertRowsEventOk = rowsInserted == 3 && rowsInsertedCount == 2;
+
+                        SpreadsheetControl.DeleteRows(sheet, 3, 1);
+                        bool deleteRowsEventOk = rowsDeleted == 3;
+
+                        SpreadsheetControl.InsertColumns(sheet, 2, 1);
+                        bool insertColsEventOk = colsInserted == 2;
+
+                        SpreadsheetControl.DeleteColumns(sheet, 2, 1);
+                        bool deleteColsEventOk = colsDeleted == 2;
+
+                        bool eventsOk = insertRowsEventOk && deleteRowsEventOk && insertColsEventOk && deleteColsEventOk;
+                        Console.WriteLine($"[Report] R5 events: rowsInserted={rowsInserted}/{rowsInsertedCount} rowsDeleted={rowsDeleted} colsInserted={colsInserted} colsDeleted={colsDeleted} -> {(eventsOk ? "PASS" : "FAIL")}");
+
+                        // ---- R6: rows are moved like columns ----
+                        bool rowsMovedOk = true;
+                        {
+                            SpreadsheetSheet other = SpreadsheetControl.AddSheet("Rows");
+                            SpreadsheetControl.SetData(other, new Dictionary<(int, int), string>
+                            {
+                                [(0, 0)] = "r0", [(0, 1)] = "r1", [(0, 2)] = "r2"
+                            });
+                            SpreadsheetControl.SetHeight(other, new Dictionary<int, double> { [2] = 40 });
+
+                            SpreadsheetControl.InsertRows(other, 1, 2);
+
+                            rowsMovedOk = other.Data[(0, 0)] == "r0" && other.Data[(0, 3)] == "r1" && other.Data[(0, 4)] == "r2"
+                                && !other.Data.ContainsKey((0, 1)) && other.RowHeights.TryGetValue(4, out double h) && h == 40;
+
+                            SpreadsheetControl.DeleteRows(other, 1, 2);
+                            rowsMovedOk = rowsMovedOk && other.Data[(0, 1)] == "r1" && other.Data[(0, 2)] == "r2";
+
+                            SpreadsheetControl.RemoveSheet(other);
+                            SpreadsheetControl.CurrentSheetIndex = 0;
+                        }
+
+                        Console.WriteLine($"[Report] R6 InsertRows/DeleteRows on a non-current sheet -> {(rowsMovedOk ? "PASS" : "FAIL")}");
+
+                        bool allOk = numericFormatOk && textFormulaOk && exportOk && formulaApiOk && functionsOk && conditionalOk && recalcOk && eventsOk && rowsMovedOk;
+                        Console.WriteLine($"[Report] RESULT {(allOk ? "PASS" : "FAIL")}");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[Report] EXCEPTION {ex}");
+                    }
+                    finally
+                    {
+                        try { File.Delete(xlsxPath); } catch { }
+
+                        Environment.Exit(0);
+                    }
+                };
+            }
+
             // Automated test for the sheet tab strip: visibility (single sheet is hidden by default
             // and shown after a second sheet is added), click switching, hidden sheets and the
             // rename / delete / move API.

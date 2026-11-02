@@ -3692,19 +3692,33 @@ namespace Spreadalonia
                                             continue;
                                         }
 
-                                        // Determine display text: numeric cells are formatted, then
-                                        // formula results, then the raw text.
-                                        string displayText = txt;
+                                        // Determine the text to display: a formula cell contributes the
+                                        // text of its evaluated result, every other cell the text stored
+                                        // in the data. A numeric cell then formats that text, so that a
+                                        // formula whose result is a number is shown with the same
+                                        // thousands separators and decimals as a typed number.
+                                        CellData formulaCell = null;
+
+                                        if (FormulaCells != null)
+                                        {
+                                            FormulaCells.TryGetValue((left + x, top + y), out formulaCell);
+                                        }
+
+                                        string rawText = formulaCell != null ? formulaCell.DisplayText : txt;
+
+                                        // Only a numeric result is formatted: a formula that returns text, a
+                                        // boolean or an error must be shown as it is, otherwise something
+                                        // like =IF(A1>0,"Yes","No") would be turned into an empty string.
+                                        bool numberResult = formulaCell == null || formulaCell.ValueType == CellType.Number;
+
+                                        string displayText = rawText;
                                         NumericCell activeNumericCell = null;
 
-                                        if (NumericCells.TryGetValue((left + x, top + y), out NumericCell numericCell) && numericCell != null)
+                                        if (numberResult &&
+                                            NumericCells.TryGetValue((left + x, top + y), out NumericCell numericCell) && numericCell != null)
                                         {
                                             activeNumericCell = numericCell;
-                                            displayText = numericCell.GetDisplayText(txt);
-                                        }
-                                        else if (FormulaCells != null && FormulaCells.TryGetValue((left + x, top + y), out CellData formulaCell))
-                                        {
-                                            displayText = formulaCell.DisplayText;
+                                            displayText = numericCell.GetDisplayText(rawText);
                                         }
 
 
@@ -3732,7 +3746,9 @@ namespace Spreadalonia
                                             // Numeric values are always right aligned, like the WPF reference.
                                             hor = TextAlignment.Right;
 
-                                            if (activeNumericCell.NegativeRed && activeNumericCell.IsNegative(txt))
+                                            // The sign is taken from the text that is being formatted, which
+                                            // for a formula cell is the result and not the formula source.
+                                            if (activeNumericCell.NegativeRed && activeNumericCell.IsNegative(rawText))
                                             {
                                                 brs = activeNumericCell.NegativeBrush ?? new SolidColorBrush(Colors.Red);
                                             }
@@ -3993,10 +4009,29 @@ namespace Spreadalonia
                                     continue;
                                 }
 
-                                string mergedDisplayText = mergedText;
-                                if (FormulaCells != null && FormulaCells.TryGetValue((mergedRange.Left, mergedRange.Top), out CellData mergedFormulaCell))
+                                // Same rule as for a regular cell: a formula contributes the text of its
+                                // result, and a numeric cell then formats it (only when the result is a
+                                // number).
+                                CellData mergedFormulaCell = null;
+
+                                if (FormulaCells != null)
                                 {
-                                    mergedDisplayText = mergedFormulaCell.DisplayText;
+                                    FormulaCells.TryGetValue((mergedRange.Left, mergedRange.Top), out mergedFormulaCell);
+                                }
+
+                                string mergedRawText = mergedFormulaCell != null ? mergedFormulaCell.DisplayText : mergedText;
+
+                                bool mergedNumberResult = mergedFormulaCell == null || mergedFormulaCell.ValueType == CellType.Number;
+
+                                string mergedDisplayText = mergedRawText;
+                                NumericCell mergedNumericCell = null;
+
+                                if (mergedNumberResult &&
+                                    NumericCells.TryGetValue((mergedRange.Left, mergedRange.Top), out NumericCell mergedCustomNumericCell) &&
+                                    mergedCustomNumericCell != null)
+                                {
+                                    mergedNumericCell = mergedCustomNumericCell;
+                                    mergedDisplayText = mergedNumericCell.GetDisplayText(mergedRawText);
                                 }
 
                                 if (!CellTypefaces.TryGetValue((mergedRange.Left, mergedRange.Top), out Typeface mergedFace) &&
@@ -4035,6 +4070,21 @@ namespace Spreadalonia
                                 if (CellMargin.TryGetValue((mergedRange.Left, mergedRange.Top), out Thickness mergedCustomMargin))
                                 {
                                     mergedMargin = mergedCustomMargin;
+                                }
+
+                                if (mergedNumericCell != null)
+                                {
+                                    // A numeric value is always right aligned (unless the cell asks for
+                                    // another alignment explicitly) and honours the negative red option.
+                                    if (!CellTextAlignment.ContainsKey((mergedRange.Left, mergedRange.Top)))
+                                    {
+                                        mergedHor = TextAlignment.Right;
+                                    }
+
+                                    if (mergedNumericCell.NegativeRed && mergedNumericCell.IsNegative(mergedRawText))
+                                    {
+                                        mergedBrush = mergedNumericCell.NegativeBrush ?? new SolidColorBrush(Colors.Red);
+                                    }
                                 }
 
                                 // Clip the merged range so the text never spills over neighbouring

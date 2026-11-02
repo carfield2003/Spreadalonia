@@ -41,6 +41,13 @@ namespace Spreadalonia
         public bool ExportFormulas { get; set; } = true;
 
         /// <summary>
+        /// Whether the worksheets that are exported are recalculated first. <see langword="true"/> by
+        /// default, so that a workbook exported with <see cref="ExportFormulas"/> turned off never
+        /// carries a stale cached value because the host changed the data without recalculating.
+        /// </summary>
+        public bool RecalculateBeforeExport { get; set; } = true;
+
+        /// <summary>
         /// Whether <see cref="LinkCell"/>s whose <see cref="LinkCell.LinkPara"/> is an absolute
         /// URI are also exported as Excel hyperlinks (the cell still contains the formatted
         /// display text). <see langword="false"/> by default: link cells are exported as plain
@@ -401,9 +408,7 @@ namespace Spreadalonia
                             if (isNumeric && NumberFormatter.TryParse(rawText, out decimal numericValue))
                             {
                                 cell.Value = numericValue;
-                                cell.Style.NumberFormat.Format = numericCell.Digits > 0
-                                    ? "#,##0." + new string('0', numericCell.Digits)
-                                    : "#,##0";
+                                cell.Style.NumberFormat.Format = numericCell.GetNumberFormat();
                                 cell.Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Right;
 
                                 if (numericCell.NegativeRed && numericValue < 0)
@@ -759,7 +764,72 @@ namespace Spreadalonia
                 WriteCachedValue(cell, formulaCell.CachedValue);
             }
 
+            // A formula cell that carries a numeric cell is formatted like a typed number, so that the
+            // amounts of a report keep their thousands separators and decimals (and stay a live
+            // formula) in the exported workbook. Only a numeric result is formatted: a formula that
+            // returns text must not be given a number format.
+            if (table.NumericCells != null &&
+                table.NumericCells.TryGetValue((c, r), out NumericCell numericCell) && numericCell != null &&
+                formulaCell.ValueType == CellType.Number)
+            {
+                cell.Style.NumberFormat.Format = numericCell.GetNumberFormat();
+                cell.Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Right;
+
+                if (numericCell.NegativeRed && TryGetDecimal(formulaCell.CachedValue, out decimal cachedValue) && cachedValue < 0)
+                {
+                    cell.Style.Font.FontColor = XLColor.Red;
+                }
+
+                if (numericCell.Strikethrough)
+                {
+                    cell.Style.Font.Strikethrough = true;
+                    cell.Style.Font.FontColor = XLColor.Red;
+                }
+            }
+
             ApplyCommonStyle(cell.Style, table, c, r, null, null);
+        }
+
+        /// <summary>
+        /// Converts the cached value of a formula cell to a decimal, when it is a number.
+        /// </summary>
+        /// <param name="value">The cached value of the formula.</param>
+        /// <param name="result">The value converted to a decimal.</param>
+        private static bool TryGetDecimal(object value, out decimal result)
+        {
+            result = 0m;
+
+            if (value is decimal dec)
+            {
+                result = dec;
+                return true;
+            }
+
+            if (value is double dbl)
+            {
+                result = (decimal)dbl;
+                return true;
+            }
+
+            if (value is int intValue)
+            {
+                result = intValue;
+                return true;
+            }
+
+            if (value is long longValue)
+            {
+                result = longValue;
+                return true;
+            }
+
+            if (value is float floatValue)
+            {
+                result = (decimal)floatValue;
+                return true;
+            }
+
+            return false;
         }
 
         private static void WriteValueCell(IXLCell cell, string rawText, Table table, int c, int r, Typeface defaultTypeface, XLColor defaultForeground)

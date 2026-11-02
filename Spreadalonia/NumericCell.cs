@@ -441,6 +441,16 @@ namespace Spreadalonia
         }
 
         /// <summary>
+        /// The Excel number format that corresponds to <see cref="Digits"/> (thousands separators and a
+        /// fixed number of decimals, e.g. <c>#,##0.00</c>). It is used both by the renderer and by the
+        /// xlsx exporter, so that a cell looks the same on screen and in the exported workbook.
+        /// </summary>
+        public string GetNumberFormat()
+        {
+            return Digits > 0 ? "#,##0." + new string('0', Digits) : "#,##0";
+        }
+
+        /// <summary>
         /// Validates text typed by the user and normalises it to the value that should be stored
         /// in the cell data.
         /// </summary>

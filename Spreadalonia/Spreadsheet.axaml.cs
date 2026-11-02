@@ -319,11 +319,21 @@ namespace Spreadalonia
         }
 
         /// <summary>
-        /// Reads the value of a cell of the specified worksheet; used by the data accessor of the
-        /// formula engine of that worksheet.
+        /// Returns the formula data of a cell of the specified worksheet: the entry of
+        /// <see cref="SpreadsheetSheet.FormulaCells"/> when the cell contains a formula, the parsed
+        /// content of <see cref="SpreadsheetSheet.Data"/> otherwise, and <see langword="null"/> when the
+        /// cell is empty. It is also the data accessor of the formula engine of the worksheet.
         /// </summary>
-        private static CellData GetCellData(SpreadsheetSheet sheet, int column, int row)
+        /// <param name="sheet">The worksheet to read, or <see langword="null"/> for the displayed one.</param>
+        /// <param name="column">The column of the cell.</param>
+        /// <param name="row">The row of the cell.</param>
+        public static CellData GetCellData(SpreadsheetSheet sheet, int column, int row)
         {
+            if (sheet == null)
+            {
+                return null;
+            }
+
             if (sheet.FormulaCells != null && sheet.FormulaCells.TryGetValue((column, row), out CellData formulaCell))
             {
                 return formulaCell;
@@ -656,6 +666,27 @@ namespace Spreadalonia
             get { return GetValue(SheetTabMaxWidthProperty); }
             set { SetValue(SheetTabMaxWidthProperty, value); }
         }
+
+        /// <summary>
+        /// Raised after rows have been inserted into a worksheet. The host uses it to shift the cell
+        /// references it keeps on its own (for instance the formulas of a report).
+        /// </summary>
+        public event EventHandler<RowsChangedEventArgs> RowsInserted;
+
+        /// <summary>
+        /// Raised after rows have been deleted from a worksheet.
+        /// </summary>
+        public event EventHandler<RowsChangedEventArgs> RowsDeleted;
+
+        /// <summary>
+        /// Raised after columns have been inserted into a worksheet.
+        /// </summary>
+        public event EventHandler<ColumnsChangedEventArgs> ColumnsInserted;
+
+        /// <summary>
+        /// Raised after columns have been deleted from a worksheet.
+        /// </summary>
+        public event EventHandler<ColumnsChangedEventArgs> ColumnsDeleted;
 
         /// <summary>
         /// Raised when a worksheet has been removed from the spreadsheet.
@@ -1909,6 +1940,14 @@ namespace Spreadalonia
                 throw new InvalidOperationException("The spreadsheet must be initialised before it can be exported to xlsx.");
             }
 
+            // The cached results are only as fresh as the last recalculation: when the workbook is
+            // exported without its formulas, a stale cache would write the previous values, so the
+            // worksheet is recalculated first (unless the host opts out).
+            if (options == null || options.RecalculateBeforeExport)
+            {
+                this.RecalculateAll();
+            }
+
             XlsxExporter.Export(ContentTable, stream, options);
         }
 
@@ -1936,6 +1975,26 @@ namespace Spreadalonia
             if (!IsInitialized)
             {
                 throw new InvalidOperationException("The spreadsheet must be initialised before it can be exported to xlsx.");
+            }
+
+            // Every worksheet that is about to be written is recalculated first, so that the exported
+            // values match the data even when the host changed it without recalculating.
+            if (options == null || options.RecalculateBeforeExport)
+            {
+                if (sheets == null || sheets.Count == 0)
+                {
+                    this.RecalculateAll();
+                }
+                else
+                {
+                    foreach (SpreadsheetSheet sheet in sheets)
+                    {
+                        if (sheet != null)
+                        {
+                            this.RecalculateSheet(sheet);
+                        }
+                    }
+                }
             }
 
             XlsxExporter.Export(ContentTable, sheets, stream, options);
@@ -3924,17 +3983,20 @@ namespace Spreadalonia
 
             if (this.Selection.Count == 1 && this.Selection[0].IsColumns(table) && !this.Selection[0].IsRows(table))
             {
-                table.Data = table.Data.InsertColumns(this.Selection[0], this.UndoStack);
+                SelectionRange selection = this.Selection[0];
+                SpreadsheetSheet sheet = this.CurrentSheet;
 
-                table.CellForeground = table.CellForeground.InsertColumns(this.Selection[0], this.UndoStackCellForeground);
-                table.CellMargin = table.CellMargin.InsertColumns(this.Selection[0], this.UndoStackCellMargin);
-                table.CellTextAlignment = table.CellTextAlignment.InsertColumns(this.Selection[0], this.UndoStackCellHorizontalAlignment);
-                table.CellTypefaces = table.CellTypefaces.InsertColumns(this.Selection[0], this.UndoStackCellTypeface);
-                table.CellVerticalAlignment = table.CellVerticalAlignment.InsertColumns(this.Selection[0], this.UndoStackCellVerticalAlignment);
+                table.Data = table.Data.InsertColumns(selection, this.UndoStack);
 
-                table.ColumnForeground = table.ColumnForeground.Insert(this.Selection[0].Left, this.Selection[0].Width, this.Selection[0], this.UndoStackColumnForeground);
-                table.ColumnTypefaces = table.ColumnTypefaces.Insert(this.Selection[0].Left, this.Selection[0].Width, this.Selection[0], this.UndoStackColumnTypeface);
-                table.ColumnWidths = table.ColumnWidths.Insert(this.Selection[0].Left, this.Selection[0].Width, this.Selection[0], this.UndoStackColumnWidth);
+                table.CellForeground = table.CellForeground.InsertColumns(selection, this.UndoStackCellForeground);
+                table.CellMargin = table.CellMargin.InsertColumns(selection, this.UndoStackCellMargin);
+                table.CellTextAlignment = table.CellTextAlignment.InsertColumns(selection, this.UndoStackCellHorizontalAlignment);
+                table.CellTypefaces = table.CellTypefaces.InsertColumns(selection, this.UndoStackCellTypeface);
+                table.CellVerticalAlignment = table.CellVerticalAlignment.InsertColumns(selection, this.UndoStackCellVerticalAlignment);
+
+                table.ColumnForeground = table.ColumnForeground.Insert(selection.Left, selection.Width, selection, this.UndoStackColumnForeground);
+                table.ColumnTypefaces = table.ColumnTypefaces.Insert(selection.Left, selection.Width, selection, this.UndoStackColumnTypeface);
+                table.ColumnWidths = table.ColumnWidths.Insert(selection.Left, selection.Width, selection, this.UndoStackColumnWidth);
 
                 this.UndoStackRowForeground.Push(null);
                 this.UndoStackRowHeight.Push(null);
@@ -3945,6 +4007,8 @@ namespace Spreadalonia
                 table.InvalidateVisual();
                 HorizontalHeaderControl.InvalidateVisual();
                 VerticalHeaderControl.InvalidateVisual();
+
+                this.ColumnsInserted?.Invoke(this, new ColumnsChangedEventArgs(sheet, selection.Left, Math.Max(1, selection.Width)));
             }
         }
 
@@ -3957,17 +4021,20 @@ namespace Spreadalonia
 
             if (this.Selection.Count == 1 && this.Selection[0].IsColumns(table) && !this.Selection[0].IsRows(table))
             {
-                table.Data = table.Data.DeleteColumns(this.Selection[0], this.UndoStack);
+                SelectionRange selection = this.Selection[0];
+                SpreadsheetSheet sheet = this.CurrentSheet;
 
-                table.CellForeground = table.CellForeground.DeleteColumns(this.Selection[0], this.UndoStackCellForeground);
-                table.CellMargin = table.CellMargin.DeleteColumns(this.Selection[0], this.UndoStackCellMargin);
-                table.CellTextAlignment = table.CellTextAlignment.DeleteColumns(this.Selection[0], this.UndoStackCellHorizontalAlignment);
-                table.CellTypefaces = table.CellTypefaces.DeleteColumns(this.Selection[0], this.UndoStackCellTypeface);
-                table.CellVerticalAlignment = table.CellVerticalAlignment.DeleteColumns(this.Selection[0], this.UndoStackCellVerticalAlignment);
+                table.Data = table.Data.DeleteColumns(selection, this.UndoStack);
 
-                table.ColumnForeground = table.ColumnForeground.Delete(this.Selection[0].Left, this.Selection[0].Width, this.Selection[0], this.UndoStackColumnForeground);
-                table.ColumnTypefaces = table.ColumnTypefaces.Delete(this.Selection[0].Left, this.Selection[0].Width, this.Selection[0], this.UndoStackColumnTypeface);
-                table.ColumnWidths = table.ColumnWidths.Delete(this.Selection[0].Left, this.Selection[0].Width, this.Selection[0], this.UndoStackColumnWidth);
+                table.CellForeground = table.CellForeground.DeleteColumns(selection, this.UndoStackCellForeground);
+                table.CellMargin = table.CellMargin.DeleteColumns(selection, this.UndoStackCellMargin);
+                table.CellTextAlignment = table.CellTextAlignment.DeleteColumns(selection, this.UndoStackCellHorizontalAlignment);
+                table.CellTypefaces = table.CellTypefaces.DeleteColumns(selection, this.UndoStackCellTypeface);
+                table.CellVerticalAlignment = table.CellVerticalAlignment.DeleteColumns(selection, this.UndoStackCellVerticalAlignment);
+
+                table.ColumnForeground = table.ColumnForeground.Delete(selection.Left, selection.Width, selection, this.UndoStackColumnForeground);
+                table.ColumnTypefaces = table.ColumnTypefaces.Delete(selection.Left, selection.Width, selection, this.UndoStackColumnTypeface);
+                table.ColumnWidths = table.ColumnWidths.Delete(selection.Left, selection.Width, selection, this.UndoStackColumnWidth);
 
                 this.UndoStackRowForeground.Push(null);
                 this.UndoStackRowHeight.Push(null);
@@ -3978,6 +4045,8 @@ namespace Spreadalonia
                 table.InvalidateVisual();
                 HorizontalHeaderControl.InvalidateVisual();
                 VerticalHeaderControl.InvalidateVisual();
+
+                this.ColumnsDeleted?.Invoke(this, new ColumnsChangedEventArgs(sheet, selection.Left, Math.Max(1, selection.Width)));
             }
         }
 
@@ -3990,17 +4059,20 @@ namespace Spreadalonia
 
             if (this.Selection.Count == 1 && !this.Selection[0].IsColumns(table) && this.Selection[0].IsRows(table))
             {
-                table.Data = table.Data.InsertRows(this.Selection[0], this.UndoStack);
+                SelectionRange selection = this.Selection[0];
+                SpreadsheetSheet sheet = this.CurrentSheet;
 
-                table.CellForeground = table.CellForeground.InsertRows(this.Selection[0], this.UndoStackCellForeground);
-                table.CellMargin = table.CellMargin.InsertRows(this.Selection[0], this.UndoStackCellMargin);
-                table.CellTextAlignment = table.CellTextAlignment.InsertRows(this.Selection[0], this.UndoStackCellHorizontalAlignment);
-                table.CellTypefaces = table.CellTypefaces.InsertRows(this.Selection[0], this.UndoStackCellTypeface);
-                table.CellVerticalAlignment = table.CellVerticalAlignment.InsertRows(this.Selection[0], this.UndoStackCellVerticalAlignment);
+                table.Data = table.Data.InsertRows(selection, this.UndoStack);
 
-                table.RowForeground = table.RowForeground.Insert(this.Selection[0].Top, this.Selection[0].Height, this.Selection[0], this.UndoStackRowForeground);
-                table.RowTypefaces = table.RowTypefaces.Insert(this.Selection[0].Top, this.Selection[0].Height, this.Selection[0], this.UndoStackRowTypeface);
-                table.RowHeights = table.RowHeights.Insert(this.Selection[0].Top, this.Selection[0].Height, this.Selection[0], this.UndoStackRowHeight);
+                table.CellForeground = table.CellForeground.InsertRows(selection, this.UndoStackCellForeground);
+                table.CellMargin = table.CellMargin.InsertRows(selection, this.UndoStackCellMargin);
+                table.CellTextAlignment = table.CellTextAlignment.InsertRows(selection, this.UndoStackCellHorizontalAlignment);
+                table.CellTypefaces = table.CellTypefaces.InsertRows(selection, this.UndoStackCellTypeface);
+                table.CellVerticalAlignment = table.CellVerticalAlignment.InsertRows(selection, this.UndoStackCellVerticalAlignment);
+
+                table.RowForeground = table.RowForeground.Insert(selection.Top, selection.Height, selection, this.UndoStackRowForeground);
+                table.RowTypefaces = table.RowTypefaces.Insert(selection.Top, selection.Height, selection, this.UndoStackRowTypeface);
+                table.RowHeights = table.RowHeights.Insert(selection.Top, selection.Height, selection, this.UndoStackRowHeight);
 
                 this.UndoStackColumnForeground.Push(null);
                 this.UndoStackColumnWidth.Push(null);
@@ -4011,6 +4083,8 @@ namespace Spreadalonia
                 table.InvalidateVisual();
                 HorizontalHeaderControl.InvalidateVisual();
                 VerticalHeaderControl.InvalidateVisual();
+
+                this.RowsInserted?.Invoke(this, new RowsChangedEventArgs(sheet, selection.Top, Math.Max(1, selection.Height)));
             }
         }
 
@@ -4023,17 +4097,20 @@ namespace Spreadalonia
 
             if (this.Selection.Count == 1 && !this.Selection[0].IsColumns(table) && this.Selection[0].IsRows(table))
             {
-                table.Data = table.Data.DeleteRows(this.Selection[0], this.UndoStack);
+                SelectionRange selection = this.Selection[0];
+                SpreadsheetSheet sheet = this.CurrentSheet;
 
-                table.CellForeground = table.CellForeground.DeleteRows(this.Selection[0], this.UndoStackCellForeground);
-                table.CellMargin = table.CellMargin.DeleteRows(this.Selection[0], this.UndoStackCellMargin);
-                table.CellTextAlignment = table.CellTextAlignment.DeleteRows(this.Selection[0], this.UndoStackCellHorizontalAlignment);
-                table.CellTypefaces = table.CellTypefaces.DeleteRows(this.Selection[0], this.UndoStackCellTypeface);
-                table.CellVerticalAlignment = table.CellVerticalAlignment.DeleteRows(this.Selection[0], this.UndoStackCellVerticalAlignment);
+                table.Data = table.Data.DeleteRows(selection, this.UndoStack);
 
-                table.RowForeground = table.RowForeground.Delete(this.Selection[0].Top, this.Selection[0].Height, this.Selection[0], this.UndoStackRowForeground);
-                table.RowTypefaces = table.RowTypefaces.Delete(this.Selection[0].Top, this.Selection[0].Height, this.Selection[0], this.UndoStackRowTypeface);
-                table.RowHeights = table.RowHeights.Delete(this.Selection[0].Top, this.Selection[0].Height, this.Selection[0], this.UndoStackRowHeight);
+                table.CellForeground = table.CellForeground.DeleteRows(selection, this.UndoStackCellForeground);
+                table.CellMargin = table.CellMargin.DeleteRows(selection, this.UndoStackCellMargin);
+                table.CellTextAlignment = table.CellTextAlignment.DeleteRows(selection, this.UndoStackCellHorizontalAlignment);
+                table.CellTypefaces = table.CellTypefaces.DeleteRows(selection, this.UndoStackCellTypeface);
+                table.CellVerticalAlignment = table.CellVerticalAlignment.DeleteRows(selection, this.UndoStackCellVerticalAlignment);
+
+                table.RowForeground = table.RowForeground.Delete(selection.Top, selection.Height, selection, this.UndoStackRowForeground);
+                table.RowTypefaces = table.RowTypefaces.Delete(selection.Top, selection.Height, selection, this.UndoStackRowTypeface);
+                table.RowHeights = table.RowHeights.Delete(selection.Top, selection.Height, selection, this.UndoStackRowHeight);
 
                 this.UndoStackColumnForeground.Push(null);
                 this.UndoStackColumnWidth.Push(null);
@@ -4044,6 +4121,8 @@ namespace Spreadalonia
                 table.InvalidateVisual();
                 HorizontalHeaderControl.InvalidateVisual();
                 VerticalHeaderControl.InvalidateVisual();
+
+                this.RowsDeleted?.Invoke(this, new RowsChangedEventArgs(sheet, selection.Top, Math.Max(1, selection.Height)));
             }
         }
 
@@ -5066,6 +5145,90 @@ namespace Spreadalonia
         }
 
         /// <summary>
+        /// Returns the formula of a cell of the worksheet that is being displayed, without the leading
+        /// "=" character, or <see langword="null"/> when the cell does not contain a formula.
+        /// </summary>
+        /// <param name="column">The column of the cell.</param>
+        /// <param name="row">The row of the cell.</param>
+        public string GetFormula(int column, int row)
+        {
+            return this.GetFormula(this.CurrentSheet, column, row);
+        }
+
+        /// <summary>
+        /// Returns the formula of a cell of the specified worksheet, without the leading "="
+        /// character, or <see langword="null"/> when the cell does not contain a formula.
+        /// </summary>
+        /// <param name="sheet">The worksheet to read, or <see langword="null"/> for the displayed one.</param>
+        /// <param name="column">The column of the cell.</param>
+        /// <param name="row">The row of the cell.</param>
+        public string GetFormula(SpreadsheetSheet sheet, int column, int row)
+        {
+            if (sheet == null || sheet.FormulaCells == null)
+            {
+                return null;
+            }
+
+            if (sheet.FormulaCells.TryGetValue((column, row), out CellData cellData) && cellData != null && cellData.IsFormula)
+            {
+                return cellData.Formula;
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Makes a cell of the worksheet that is being displayed contain a formula. The formula can be
+        /// written with or without the leading "=" character; the other cells that depend on it are
+        /// recalculated.
+        /// </summary>
+        /// <param name="column">The column of the cell.</param>
+        /// <param name="row">The row of the cell.</param>
+        /// <param name="formula">The formula, or <see langword="null"/> to clear the cell.</param>
+        public void SetFormula(int column, int row, string formula)
+        {
+            this.SetFormula(this.CurrentSheet, column, row, formula);
+        }
+
+        /// <summary>
+        /// Makes a cell of the specified worksheet contain a formula. The formula can be written with or
+        /// without the leading "=" character; the other cells that depend on it are recalculated.
+        /// </summary>
+        /// <param name="sheet">The worksheet to write, or <see langword="null"/> for the displayed one.</param>
+        /// <param name="column">The column of the cell.</param>
+        /// <param name="row">The row of the cell.</param>
+        /// <param name="formula">The formula, or <see langword="null"/> to clear the cell.</param>
+        public void SetFormula(SpreadsheetSheet sheet, int column, int row, string formula)
+        {
+            if (sheet == null)
+            {
+                return;
+            }
+
+            string text = null;
+
+            if (!string.IsNullOrEmpty(formula))
+            {
+                text = formula[0] == '=' ? formula : "=" + formula;
+            }
+
+            this.SetData(sheet, new[] { new KeyValuePair<(int, int), string>((column, row), text) });
+        }
+
+        /// <summary>
+        /// Returns the formula data of a cell of the worksheet that is being displayed: the entry of
+        /// <see cref="SpreadsheetSheet.FormulaCells"/> when the cell contains a formula, the parsed
+        /// content of <see cref="SpreadsheetSheet.Data"/> otherwise, and <see langword="null"/> when the
+        /// cell is empty.
+        /// </summary>
+        /// <param name="column">The column of the cell.</param>
+        /// <param name="row">The row of the cell.</param>
+        public CellData GetCellData(int column, int row)
+        {
+            return GetCellData(this.CurrentSheet, column, row);
+        }
+
+        /// <summary>
         /// Sets the width of the specified columns of the specified worksheet. When the worksheet
         /// is the one that is being displayed, the call is the same as <see cref="SetWidth(Dictionary{int, double})"/>
         /// and is undoable.
@@ -5312,6 +5475,202 @@ namespace Spreadalonia
                 }
                 sheet.MergedRanges = b.ToImmutable();
             }
+        }
+
+        /// <summary>
+        /// Inserts <paramref name="count"/> rows starting from the specified row index on the specified
+        /// worksheet. When the worksheet is the one that is being displayed, the call is the same as
+        /// <see cref="InsertRows()"/> (with the right selection) and is undoable.
+        /// </summary>
+        /// <param name="sheet">The worksheet the rows are inserted into.</param>
+        /// <param name="index">The position the first inserted row has.</param>
+        /// <param name="count">The number of rows to insert.</param>
+        public void InsertRows(SpreadsheetSheet sheet, int index, int count)
+        {
+            if (sheet == null || count <= 0)
+            {
+                return;
+            }
+
+            if (this.CurrentSheet == sheet)
+            {
+                this.Selection = ImmutableList.Create(new SelectionRange(0, index, sheet.MaxTableWidth, index + count - 1));
+                this.InsertRows();
+                return;
+            }
+
+            SelectionRange range = new SelectionRange(0, index, sheet.MaxTableWidth, index + count - 1);
+
+            Stack<StackFrame<(int, int), string>> stringStack = new Stack<StackFrame<(int, int), string>>();
+            Stack<StackFrame<(int, int), IBrush>> brushStack = new Stack<StackFrame<(int, int), IBrush>>();
+            Stack<ValueStackFrame<(int, int), Thickness>> thicknessStack = new Stack<ValueStackFrame<(int, int), Thickness>>();
+            Stack<ValueStackFrame<(int, int), TextAlignment>> alignStack = new Stack<ValueStackFrame<(int, int), TextAlignment>>();
+            Stack<ValueStackFrame<(int, int), Typeface>> typefaceStack = new Stack<ValueStackFrame<(int, int), Typeface>>();
+            Stack<ValueStackFrame<(int, int), VerticalAlignment>> valignStack = new Stack<ValueStackFrame<(int, int), VerticalAlignment>>();
+            Stack<ValueStackFrame<(int, int), double>> doubleStack = new Stack<ValueStackFrame<(int, int), double>>();
+
+            Stack<StackFrame<(int, int), TitleCell>> titleStack = new Stack<StackFrame<(int, int), TitleCell>>();
+            Stack<StackFrame<(int, int), LinkCell>> linkStack = new Stack<StackFrame<(int, int), LinkCell>>();
+            Stack<StackFrame<(int, int), ButtonCell>> buttonStack = new Stack<StackFrame<(int, int), ButtonCell>>();
+            Stack<StackFrame<(int, int), TreeGradeCell>> treeStack = new Stack<StackFrame<(int, int), TreeGradeCell>>();
+            Stack<StackFrame<(int, int), NumericCell>> numericStack = new Stack<StackFrame<(int, int), NumericCell>>();
+
+            sheet.Data = sheet.Data.InsertRows(range, stringStack);
+            sheet.CellForeground = sheet.CellForeground.InsertRows(range, brushStack);
+            sheet.CellMargin = sheet.CellMargin.InsertRows(range, thicknessStack);
+            sheet.CellTextAlignment = sheet.CellTextAlignment.InsertRows(range, alignStack);
+            sheet.CellTypefaces = sheet.CellTypefaces.InsertRows(range, typefaceStack);
+            sheet.CellVerticalAlignment = sheet.CellVerticalAlignment.InsertRows(range, valignStack);
+            sheet.CellFontSize = sheet.CellFontSize.InsertRows(range, doubleStack);
+            sheet.TitleCells = sheet.TitleCells.InsertRows(range, titleStack);
+            sheet.LinkCells = sheet.LinkCells.InsertRows(range, linkStack);
+            sheet.ButtonCells = sheet.ButtonCells.InsertRows(range, buttonStack);
+            sheet.TreeCells = sheet.TreeCells.InsertRows(range, treeStack);
+            sheet.NumericCells = sheet.NumericCells.InsertRows(range, numericStack);
+
+            // The formula engine indexes its cached results and its dependency graph by cell, so
+            // instead of moving them they are dropped and rebuilt from the shifted data.
+            sheet.FormulaCells.Clear();
+            sheet.FormulaEngine.Clear();
+            this.RecalculateSheet(sheet);
+
+            // Row-keyed collections.
+            Stack<StackFrame<int, IBrush>> rowBrushStack = new Stack<StackFrame<int, IBrush>>();
+            Stack<ValueStackFrame<int, Typeface>> rowTypefaceStack = new Stack<ValueStackFrame<int, Typeface>>();
+            Stack<ValueStackFrame<int, double>> rowHeightStack = new Stack<ValueStackFrame<int, double>>();
+
+            sheet.RowForeground = sheet.RowForeground.Insert(index, count, range, rowBrushStack);
+            sheet.RowTypefaces = sheet.RowTypefaces.Insert(index, count, range, rowTypefaceStack);
+            sheet.RowHeights = sheet.RowHeights.Insert(index, count, range, rowHeightStack);
+
+            // Hidden rows: keep them in sync.
+            HashSet<int> newHidden = new HashSet<int>();
+            foreach (int h in sheet.HiddenRows)
+            {
+                newHidden.Add(h >= index ? h + count : h);
+            }
+            sheet.HiddenRows.Clear();
+            foreach (int h in newHidden) sheet.HiddenRows.Add(h);
+
+            // Merged ranges: shift every range whose top edge is at >= index.
+            if (!sheet.MergedRanges.IsEmpty)
+            {
+                var b = sheet.MergedRanges.ToBuilder();
+                for (int i = 0; i < b.Count; i++)
+                {
+                    SelectionRange r = b[i];
+                    if (r.Top >= index)
+                    {
+                        b[i] = new SelectionRange(r.Left, r.Top + count, r.Right, r.Bottom + count);
+                    }
+                }
+                sheet.MergedRanges = b.ToImmutable();
+            }
+
+            // Read-only ranges: same shift.
+            if (sheet.ReadonlyRanges.Count > 0)
+            {
+                for (int i = 0; i < sheet.ReadonlyRanges.Count; i++)
+                {
+                    SelectionRange r = sheet.ReadonlyRanges[i];
+                    if (r.Top >= index)
+                    {
+                        sheet.ReadonlyRanges[i] = new SelectionRange(r.Left, r.Top + count, r.Right, r.Bottom + count);
+                    }
+                }
+            }
+
+            this.RowsInserted?.Invoke(this, new RowsChangedEventArgs(sheet, index, count));
+        }
+
+        /// <summary>
+        /// Deletes <paramref name="count"/> rows starting from the specified row index on the specified
+        /// worksheet. When the worksheet is the one that is being displayed, the call is the same as
+        /// <see cref="DeleteRows()"/> (with the right selection) and is undoable.
+        /// </summary>
+        /// <param name="sheet">The worksheet the rows are removed from.</param>
+        /// <param name="index">The position the first removed row has.</param>
+        /// <param name="count">The number of rows to remove.</param>
+        public void DeleteRows(SpreadsheetSheet sheet, int index, int count)
+        {
+            if (sheet == null || count <= 0)
+            {
+                return;
+            }
+
+            if (this.CurrentSheet == sheet)
+            {
+                this.Selection = ImmutableList.Create(new SelectionRange(0, index, sheet.MaxTableWidth, index + count - 1));
+                this.DeleteRows();
+                return;
+            }
+
+            SelectionRange range = new SelectionRange(0, index, sheet.MaxTableWidth, index + count - 1);
+
+            Stack<StackFrame<(int, int), string>> stringStack = new Stack<StackFrame<(int, int), string>>();
+            Stack<StackFrame<(int, int), IBrush>> brushStack = new Stack<StackFrame<(int, int), IBrush>>();
+            Stack<ValueStackFrame<(int, int), Thickness>> thicknessStack = new Stack<ValueStackFrame<(int, int), Thickness>>();
+            Stack<ValueStackFrame<(int, int), TextAlignment>> alignStack = new Stack<ValueStackFrame<(int, int), TextAlignment>>();
+            Stack<ValueStackFrame<(int, int), Typeface>> typefaceStack = new Stack<ValueStackFrame<(int, int), Typeface>>();
+            Stack<ValueStackFrame<(int, int), VerticalAlignment>> valignStack = new Stack<ValueStackFrame<(int, int), VerticalAlignment>>();
+            Stack<ValueStackFrame<(int, int), double>> doubleStack = new Stack<ValueStackFrame<(int, int), double>>();
+
+            Stack<StackFrame<(int, int), TitleCell>> titleStack = new Stack<StackFrame<(int, int), TitleCell>>();
+            Stack<StackFrame<(int, int), LinkCell>> linkStack = new Stack<StackFrame<(int, int), LinkCell>>();
+            Stack<StackFrame<(int, int), ButtonCell>> buttonStack = new Stack<StackFrame<(int, int), ButtonCell>>();
+            Stack<StackFrame<(int, int), TreeGradeCell>> treeStack = new Stack<StackFrame<(int, int), TreeGradeCell>>();
+            Stack<StackFrame<(int, int), NumericCell>> numericStack = new Stack<StackFrame<(int, int), NumericCell>>();
+
+            sheet.Data = sheet.Data.DeleteRows(range, stringStack);
+            sheet.CellForeground = sheet.CellForeground.DeleteRows(range, brushStack);
+            sheet.CellMargin = sheet.CellMargin.DeleteRows(range, thicknessStack);
+            sheet.CellTextAlignment = sheet.CellTextAlignment.DeleteRows(range, alignStack);
+            sheet.CellTypefaces = sheet.CellTypefaces.DeleteRows(range, typefaceStack);
+            sheet.CellVerticalAlignment = sheet.CellVerticalAlignment.DeleteRows(range, valignStack);
+            sheet.CellFontSize = sheet.CellFontSize.DeleteRows(range, doubleStack);
+            sheet.TitleCells = sheet.TitleCells.DeleteRows(range, titleStack);
+            sheet.LinkCells = sheet.LinkCells.DeleteRows(range, linkStack);
+            sheet.ButtonCells = sheet.ButtonCells.DeleteRows(range, buttonStack);
+            sheet.TreeCells = sheet.TreeCells.DeleteRows(range, treeStack);
+            sheet.NumericCells = sheet.NumericCells.DeleteRows(range, numericStack);
+
+            sheet.FormulaCells.Clear();
+            sheet.FormulaEngine.Clear();
+            this.RecalculateSheet(sheet);
+
+            Stack<StackFrame<int, IBrush>> rowBrushStack = new Stack<StackFrame<int, IBrush>>();
+            Stack<ValueStackFrame<int, Typeface>> rowTypefaceStack = new Stack<ValueStackFrame<int, Typeface>>();
+            Stack<ValueStackFrame<int, double>> rowHeightStack = new Stack<ValueStackFrame<int, double>>();
+
+            sheet.RowForeground = sheet.RowForeground.Delete(index, count, range, rowBrushStack);
+            sheet.RowTypefaces = sheet.RowTypefaces.Delete(index, count, range, rowTypefaceStack);
+            sheet.RowHeights = sheet.RowHeights.Delete(index, count, range, rowHeightStack);
+
+            HashSet<int> newHidden = new HashSet<int>();
+            foreach (int h in sheet.HiddenRows)
+            {
+                if (h < index) newHidden.Add(h);
+                else if (h >= index + count) newHidden.Add(h - count);
+            }
+            sheet.HiddenRows.Clear();
+            foreach (int h in newHidden) sheet.HiddenRows.Add(h);
+
+            if (!sheet.MergedRanges.IsEmpty)
+            {
+                var b = sheet.MergedRanges.ToBuilder();
+                for (int i = 0; i < b.Count; i++)
+                {
+                    SelectionRange r = b[i];
+                    if (r.Bottom < index) continue;
+                    int newTop = r.Top < index ? index : r.Top;
+                    int newBottom = r.Bottom - count;
+                    if (newBottom < newTop) { b.RemoveAt(i); i--; continue; }
+                    b[i] = new SelectionRange(r.Left, newTop, r.Right, newBottom);
+                }
+                sheet.MergedRanges = b.ToImmutable();
+            }
+
+            this.RowsDeleted?.Invoke(this, new RowsChangedEventArgs(sheet, index, count));
         }
 
         /// <summary>

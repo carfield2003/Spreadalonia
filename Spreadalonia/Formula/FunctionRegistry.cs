@@ -128,11 +128,20 @@ namespace Spreadalonia.Formula
             Register("SQRT", Sqrt);
             Register("POWER", PowerFunc);
 
+            // Rounding and integer arithmetic (used by the accounting report formulas)
+            Register("FLOOR", Floor);
+            Register("CEILING", Ceiling);
+            Register("ROUNDUP", RoundUp);
+            Register("ROUNDDOWN", RoundDown);
+            Register("MOD", Mod);
+            Register("INT", Int);
+
             // Logical
             Register("IF", If);
             Register("AND", And);
             Register("OR", Or);
             Register("NOT", Not);
+            Register("IFERROR", IfError);
 
             // Text
             Register("CONCAT", Concat);
@@ -144,6 +153,10 @@ namespace Spreadalonia.Formula
             Register("LEFT", Left);
             Register("RIGHT", Right);
             Register("MID", Mid);
+
+            // Conditional aggregation
+            Register("SUMIF", SumIf);
+            Register("COUNTIF", CountIf);
 
             // Lookup
             Register("VLOOKUP", VLookup);
@@ -278,6 +291,86 @@ namespace Spreadalonia.Formula
             return Math.Pow(ToDouble(args[0]), ToDouble(args[1]));
         }
 
+        private static object Floor(List<object> args)
+        {
+            RequireArgCount("FLOOR", args, 1, 2);
+            double value = ToDouble(args[0]);
+            double significance = args.Count > 1 ? ToDouble(args[1]) : 1;
+
+            if (significance == 0)
+            {
+                return 0.0;
+            }
+
+            return Math.Floor(value / significance) * significance;
+        }
+
+        private static object Ceiling(List<object> args)
+        {
+            RequireArgCount("CEILING", args, 1, 2);
+            double value = ToDouble(args[0]);
+            double significance = args.Count > 1 ? ToDouble(args[1]) : 1;
+
+            if (significance == 0)
+            {
+                return 0.0;
+            }
+
+            return Math.Ceiling(value / significance) * significance;
+        }
+
+        private static object RoundUp(List<object> args)
+        {
+            RequireArgCount("ROUNDUP", args, 1, 2);
+            double value = ToDouble(args[0]);
+            int digits = args.Count > 1 ? (int)ToDouble(args[1]) : 0;
+            double factor = Math.Pow(10, digits);
+            double scaled = value * factor;
+
+            // Away from zero, like Excel does (Math.Round would go to the nearest even value).
+            return (scaled >= 0 ? Math.Ceiling(scaled) : Math.Floor(scaled)) / factor;
+        }
+
+        private static object RoundDown(List<object> args)
+        {
+            RequireArgCount("ROUNDDOWN", args, 1, 2);
+            double value = ToDouble(args[0]);
+            int digits = args.Count > 1 ? (int)ToDouble(args[1]) : 0;
+            double factor = Math.Pow(10, digits);
+            double scaled = value * factor;
+
+            // Towards zero, like Excel does.
+            return (scaled >= 0 ? Math.Floor(scaled) : Math.Ceiling(scaled)) / factor;
+        }
+
+        private static object Mod(List<object> args)
+        {
+            RequireArgCount("MOD", args, 2);
+            double divisor = ToDouble(args[1]);
+
+            if (divisor == 0)
+            {
+                throw new FormulaException("MOD requires a non-zero divisor");
+            }
+
+            double value = ToDouble(args[0]);
+            double result = value % divisor;
+
+            // Excel returns a result that has the same sign as the divisor.
+            if (result != 0 && (result < 0) != (divisor < 0))
+            {
+                result += divisor;
+            }
+
+            return result;
+        }
+
+        private static object Int(List<object> args)
+        {
+            RequireArgCount("INT", args, 1);
+            return Math.Floor(ToDouble(args[0]));
+        }
+
         // --- Logical Functions ---
 
         private static object If(List<object> args)
@@ -285,6 +378,17 @@ namespace Spreadalonia.Formula
             RequireArgCount("IF", args, 2, 3);
             bool condition = ToBool(args[0]);
             return condition ? (args[1] ?? 0.0) : (args.Count > 2 ? (args[2] ?? 0.0) : 0.0);
+        }
+
+        /// <summary>
+        /// IFERROR(value, fallback). The error itself is caught while the arguments are being
+        /// evaluated (see <see cref="FunctionNode.Evaluate"/>), so by the time this is called the value
+        /// is known to be valid and is simply returned.
+        /// </summary>
+        private static object IfError(List<object> args)
+        {
+            RequireArgCount("IFERROR", args, 2);
+            return args[0] ?? 0.0;
         }
 
         private static object And(List<object> args)
@@ -377,6 +481,129 @@ namespace Spreadalonia.Formula
             if (start >= text.Length) return "";
             if (start + count > text.Length) count = text.Length - start;
             return text.Substring(start, count);
+        }
+
+        // --- Lookup Functions ---
+
+        // --- Conditional aggregation ---
+
+        /// <summary>
+        /// SUMIF(range, criteria, [sum_range]): adds the values of the sum range (or of the range
+        /// itself when no sum range is given) whose counterpart in the criteria range matches.
+        /// </summary>
+        private static object SumIf(List<object> args)
+        {
+            RequireArgCount("SUMIF", args, 2, 3);
+
+            // SUMIF(range, criteria, [sum_range]): the criteria come second, the optional sum range
+            // third (when it is omitted the range itself is summed).
+            List<object> criteriaRange = AsList(args[0]);
+            object criteria = args[1];
+            List<object> sumRange = args.Count > 2 ? AsList(args[2]) : criteriaRange;
+
+            double sum = 0;
+
+            for (int i = 0; i < criteriaRange.Count && i < sumRange.Count; i++)
+            {
+                if (MatchesCriteria(criteriaRange[i], criteria) && IsNumericValue(sumRange[i]))
+                {
+                    sum += ToDouble(sumRange[i]);
+                }
+            }
+
+            return sum;
+        }
+
+        /// <summary>
+        /// COUNTIF(range, criteria): counts the values of the range that match the criteria.
+        /// </summary>
+        private static object CountIf(List<object> args)
+        {
+            RequireArgCount("COUNTIF", args, 2);
+
+            List<object> range = AsList(args[0]);
+            object criteria = args[1];
+
+            int count = 0;
+
+            foreach (object value in range)
+            {
+                if (MatchesCriteria(value, criteria))
+                {
+                    count++;
+                }
+            }
+
+            return (double)count;
+        }
+
+        /// <summary>
+        /// Returns the argument as a list: a range arrives as a flat list, a single value as a list of
+        /// one element.
+        /// </summary>
+        private static List<object> AsList(object value)
+        {
+            if (value is List<object> list)
+            {
+                return list;
+            }
+
+            return new List<object> { value };
+        }
+
+        /// <summary>
+        /// Checks a value against an Excel criteria, which is either a plain value (compared for
+        /// equality) or a comparison introduced by one of the operators =, &lt;&gt;, &lt;, &gt;, &lt;=, &gt;=.
+        /// Text comparisons are case-insensitive.
+        /// </summary>
+        private static bool MatchesCriteria(object value, object criteria)
+        {
+            string text = value == null ? "" : Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture) ?? "";
+            string pattern = criteria == null ? "" : Convert.ToString(criteria, System.Globalization.CultureInfo.InvariantCulture) ?? "";
+
+            string op = "=";
+
+            if (pattern.StartsWith(">=", StringComparison.Ordinal) || pattern.StartsWith("<=", StringComparison.Ordinal) ||
+                pattern.StartsWith("<>", StringComparison.Ordinal))
+            {
+                op = pattern.Substring(0, 2);
+                pattern = pattern.Substring(2);
+            }
+            else if (pattern.StartsWith(">", StringComparison.Ordinal) || pattern.StartsWith("<", StringComparison.Ordinal) ||
+                     pattern.StartsWith("=", StringComparison.Ordinal))
+            {
+                op = pattern.Substring(0, 1);
+                pattern = pattern.Substring(1);
+            }
+
+            // A numeric comparison is done as numbers, anything else as text.
+            if (IsNumericValue(value) &&
+                double.TryParse(pattern, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double expected))
+            {
+                double actual = ToDouble(value);
+
+                switch (op)
+                {
+                    case ">": return actual > expected;
+                    case "<": return actual < expected;
+                    case ">=": return actual >= expected;
+                    case "<=": return actual <= expected;
+                    case "<>": return actual != expected;
+                    default: return actual == expected;
+                }
+            }
+
+            int comparison = string.Compare(text, pattern, StringComparison.OrdinalIgnoreCase);
+
+            switch (op)
+            {
+                case ">": return comparison > 0;
+                case "<": return comparison < 0;
+                case ">=": return comparison >= 0;
+                case "<=": return comparison <= 0;
+                case "<>": return comparison != 0;
+                default: return comparison == 0;
+            }
         }
 
         // --- Lookup Functions ---

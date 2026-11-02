@@ -178,6 +178,39 @@ string[,] data = spreadsheet.GetSelectedData(out (int, int)[,] coordinates);
 spreadsheet.RecalculateAll(); // 强制重新计算公式引擎中的所有公式
 ```
 
+### 公式读写
+
+```csharp
+// 读取公式（不含前导 "="），非公式单元格返回 null
+string formula = spreadsheet.GetFormula(column, row);
+string formulaOfOtherSheet = spreadsheet.GetFormula(sheet, column, row);
+
+// 写入公式：带不带 "=" 都可以，依赖它的单元格会自动重算
+spreadsheet.SetFormula(column, row, "A1/A2");
+spreadsheet.SetFormula(sheet, column, row, "=A1+A2");
+
+// 单元格数据：公式单元格取 FormulaCells，否则解析 Data
+// 静态版本可在没有控件实例时使用
+CellData data = spreadsheet.GetCellData(column, row);          // 当前表
+CellData other = Spreadsheet.GetCellData(sheet, column, row);  // 指定表（静态）
+double value = data.CachedValue is double d ? d : 0;           // 计算结果
+```
+
+### 行列增删通知
+
+```csharp
+spreadsheet.RowsInserted += (s, e) =>
+{
+    // e.Sheet、e.StartIndex（起始行）、e.Count（行数）
+    shiftMyFormulaRows(e.StartIndex, e.Count);
+};
+spreadsheet.RowsDeleted += (s, e) => { /* 同上 */ };
+spreadsheet.ColumnsInserted += (s, e) => { /* e.StartIndex / e.Count */ };
+spreadsheet.ColumnsDeleted += (s, e) => { /* 同上 */ };
+```
+
+> 选中区版（`InsertRows()` 等）与程序化重载（`InsertRows(sheet, index, count)` 等）都会触发这些事件。
+
 ---
 
 ## 选择与导航

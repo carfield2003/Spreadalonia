@@ -1,3 +1,5 @@
+using System;
+
 namespace Spreadalonia.Formula
 {
     /// <summary>
@@ -348,6 +350,14 @@ namespace Spreadalonia.Formula
 
         public override object Evaluate(EvaluationContext ctx)
         {
+            // IFERROR has to catch the error raised while its first argument is being evaluated, so it
+            // cannot go through the regular argument loop below (which would let the exception escape
+            // before the function is called).
+            if (string.Equals(FunctionName, "IFERROR", StringComparison.OrdinalIgnoreCase))
+            {
+                return EvaluateIfError(ctx);
+            }
+
             // Evaluate all arguments
             var argValues = new System.Collections.Generic.List<object>();
             foreach (var arg in Arguments)
@@ -367,6 +377,31 @@ namespace Spreadalonia.Formula
 
             // Call the function
             return ctx.CallFunction(FunctionName, argValues);
+        }
+
+        /// <summary>
+        /// Evaluates IFERROR(value, fallback): the fallback is returned when evaluating the value
+        /// raises a formula error, the value itself otherwise.
+        /// </summary>
+        private object EvaluateIfError(EvaluationContext ctx)
+        {
+            if (Arguments.Count < 2)
+            {
+                throw new FormulaException("IFERROR requires 2 arguments");
+            }
+
+            object value;
+
+            try
+            {
+                value = Arguments[0].Evaluate(ctx);
+            }
+            catch (FormulaException)
+            {
+                return Arguments[1].Evaluate(ctx);
+            }
+
+            return value ?? 0.0;
         }
 
         public override string ToString()

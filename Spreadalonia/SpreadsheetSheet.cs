@@ -109,7 +109,7 @@ namespace Spreadalonia
         /// The parsed and evaluated formula data of the cells that contain formulas, indexed by
         /// (column, row).
         /// </summary>
-        internal Dictionary<(int, int), CellData> FormulaCells { get; set; } = new Dictionary<(int, int), CellData>();
+        public Dictionary<(int, int), CellData> FormulaCells { get; internal set; } = new Dictionary<(int, int), CellData>();
 
         /// <summary>
         /// The formula engine used to parse and evaluate the formulas of this sheet. Each sheet has
@@ -292,6 +292,66 @@ namespace Spreadalonia
         public override string ToString()
         {
             return this.Name;
+        }
+    }
+
+    /// <summary>
+    /// Provides the data for the row events of the <see cref="Spreadsheet"/> control
+    /// (<see cref="Spreadsheet.RowsInserted"/> and <see cref="Spreadsheet.RowsDeleted"/>).
+    /// </summary>
+    public sealed class RowsChangedEventArgs : EventArgs
+    {
+        /// <summary>
+        /// The worksheet whose rows have changed, or <see langword="null"/> when the change could not
+        /// be attributed to a specific worksheet.
+        /// </summary>
+        public SpreadsheetSheet Sheet { get; }
+
+        /// <summary>
+        /// The index of the first row that has been inserted or deleted.
+        /// </summary>
+        public int StartIndex { get; }
+
+        /// <summary>
+        /// The number of rows that have been inserted or deleted.
+        /// </summary>
+        public int Count { get; }
+
+        internal RowsChangedEventArgs(SpreadsheetSheet sheet, int startIndex, int count)
+        {
+            this.Sheet = sheet;
+            this.StartIndex = startIndex;
+            this.Count = count;
+        }
+    }
+
+    /// <summary>
+    /// Provides the data for the column events of the <see cref="Spreadsheet"/> control
+    /// (<see cref="Spreadsheet.ColumnsInserted"/> and <see cref="Spreadsheet.ColumnsDeleted"/>).
+    /// </summary>
+    public sealed class ColumnsChangedEventArgs : EventArgs
+    {
+        /// <summary>
+        /// The worksheet whose columns have changed, or <see langword="null"/> when the change could not
+        /// be attributed to a specific worksheet.
+        /// </summary>
+        public SpreadsheetSheet Sheet { get; }
+
+        /// <summary>
+        /// The index of the first column that has been inserted or deleted.
+        /// </summary>
+        public int StartIndex { get; }
+
+        /// <summary>
+        /// The number of columns that have been inserted or deleted.
+        /// </summary>
+        public int Count { get; }
+
+        internal ColumnsChangedEventArgs(SpreadsheetSheet sheet, int startIndex, int count)
+        {
+            this.Sheet = sheet;
+            this.StartIndex = startIndex;
+            this.Count = count;
         }
     }
 
