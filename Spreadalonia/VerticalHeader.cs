@@ -396,10 +396,10 @@ namespace Spreadalonia
                         margin = Owner.DefaultMargin;
                     }
 
-                    FormattedText fmtText = new FormattedText(kvp.Value, CultureInfo.CurrentCulture, FlowDirection.LeftToRight, face, this.Container.FontSize, this.Foreground);
+                    double measuredHeight = MeasureCellHeight(kvp.Key, kvp.Value, face, margin);
 
                     found = true;
-                    maxHeight = Math.Max(maxHeight, fmtText.Height + margin.Top + margin.Bottom);
+                    maxHeight = Math.Max(maxHeight, measuredHeight + margin.Top + margin.Bottom);
                 }
             }
 
@@ -465,6 +465,43 @@ namespace Spreadalonia
             }
         }
 
+        /// <summary>
+        /// Measures the height a cell needs: the height of its formatted text, laid out over the
+        /// width of its column when the cell wraps. The font size of the cell is honoured, so a row
+        /// holding a larger font is fitted to that font.
+        /// </summary>
+        /// <param name="cell">The coordinates of the cell.</param>
+        /// <param name="text">The text of the cell.</param>
+        /// <param name="face">The typeface of the cell.</param>
+        /// <param name="margin">The margin of the cell.</param>
+        /// <returns>The height of the text itself, without the margins.</returns>
+        private double MeasureCellHeight((int, int) cell, string text, Typeface face, Thickness margin)
+        {
+            double fontSize = this.Container.FontSize;
+
+            if (this.Owner.CellFontSize != null && this.Owner.CellFontSize.TryGetValue(cell, out double customFontSize) && customFontSize > 0)
+            {
+                fontSize = customFontSize;
+            }
+
+            FormattedText fmtText = new FormattedText(text ?? string.Empty, CultureInfo.CurrentCulture, FlowDirection.LeftToRight, face, fontSize, this.Foreground);
+
+            // A wrapping cell needs the height of the whole wrapped block, not of a single line.
+            if (this.Owner.CellTextStyles != null &&
+                this.Owner.CellTextStyles.TryGetValue(cell, out CellTextStyle textStyle) && textStyle != null && textStyle.Wrap)
+            {
+                double indent = textStyle.Indent > 0 ? textStyle.Indent : 0;
+                double availableWidth = Math.Max(0, this.Owner.GetWidth(cell.Item1) - margin.Left - margin.Right - indent);
+
+                if (availableWidth > 1)
+                {
+                    fmtText.MaxTextWidth = availableWidth;
+                }
+            }
+
+            return fmtText.Height;
+        }
+
         internal Reference<double> AutoFitHeightWithoutStack(int clickedRow)
         {
             bool found = false;
@@ -488,10 +525,10 @@ namespace Spreadalonia
                         margin = Owner.DefaultMargin;
                     }
 
-                    FormattedText fmtText = new FormattedText(kvp.Value, CultureInfo.CurrentCulture, FlowDirection.LeftToRight, face, this.Container.FontSize, this.Foreground);
+                    double measuredHeight = MeasureCellHeight(kvp.Key, kvp.Value, face, margin);
 
                     found = true;
-                    maxHeight = Math.Max(maxHeight, fmtText.Height + margin.Top + margin.Bottom);
+                    maxHeight = Math.Max(maxHeight, measuredHeight + margin.Top + margin.Bottom);
                 }
             }
 

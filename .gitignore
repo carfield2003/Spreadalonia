@@ -5,3 +5,5 @@ nuget-output
 artifacts
 
 nupkg/
+.codebuddy/
+*.bak

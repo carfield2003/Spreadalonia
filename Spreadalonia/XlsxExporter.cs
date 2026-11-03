@@ -689,6 +689,31 @@ namespace Spreadalonia
             style.Alignment.WrapText = true;
             style.Alignment.Horizontal = MapHorizontal(hor);
             style.Alignment.Vertical = MapVertical(ver);
+
+            // Cell text layout: underline / strikethrough and wrapping. A cell without an entry keeps
+            // the previous output, so an existing workbook is unaffected.
+            if (table.CellTextStyles != null && table.CellTextStyles.TryGetValue((c, r), out CellTextStyle textStyle) && textStyle != null)
+            {
+                if ((textStyle.Decoration & CellTextDecoration.Underline) != 0)
+                {
+                    style.Font.Underline = XLFontUnderlineValues.Single;
+                }
+
+                if ((textStyle.Decoration & CellTextDecoration.Strikethrough) != 0)
+                {
+                    style.Font.Strikethrough = true;
+                }
+
+                if (textStyle.Wrap)
+                {
+                    style.Alignment.WrapText = true;
+                }
+
+                if (textStyle.Indent > 0 && hor == TextAlignment.Left)
+                {
+                    style.Alignment.Indent = (int)Math.Round(textStyle.Indent / 3.0);
+                }
+            }
         }
 
         private static void WriteLinkCell(IXLCell cell, LinkCell linkCell, Table table, int c, int r, XlsxExportOptions options)
@@ -906,6 +931,31 @@ namespace Spreadalonia
 
             style.Alignment.Horizontal = MapHorizontal(hor);
             style.Alignment.Vertical = MapVertical(ver);
+
+            // Cell text layout: underline / strikethrough and wrapping. A cell without an entry keeps
+            // the previous output, so an existing workbook is unaffected.
+            if (table.CellTextStyles != null && table.CellTextStyles.TryGetValue((c, r), out CellTextStyle textStyle) && textStyle != null)
+            {
+                if ((textStyle.Decoration & CellTextDecoration.Underline) != 0)
+                {
+                    style.Font.Underline = XLFontUnderlineValues.Single;
+                }
+
+                if ((textStyle.Decoration & CellTextDecoration.Strikethrough) != 0)
+                {
+                    style.Font.Strikethrough = true;
+                }
+
+                if (textStyle.Wrap)
+                {
+                    style.Alignment.WrapText = true;
+                }
+
+                if (textStyle.Indent > 0 && hor == TextAlignment.Left)
+                {
+                    style.Alignment.Indent = (int)Math.Round(textStyle.Indent / 3.0);
+                }
+            }
         }
 
         private static void WriteCachedValue(IXLCell cell, object cachedValue)
@@ -986,7 +1036,7 @@ namespace Spreadalonia
                 }
 
                 XLColor borderColor = BrushToXlColor(border.Brush) ?? XLColor.Black;
-                XLBorderStyleValues style = BorderStyleFrom(border.Thickness, border.DashStyle);
+                XLBorderStyleValues style = BorderStyleFrom(border.Thickness, border.DashStyle, border.DoubleLine);
 
                 if (!border.IsHorizontal)
                 {
@@ -1084,6 +1134,18 @@ namespace Spreadalonia
 
         private static XLBorderStyleValues BorderStyleFrom(double thickness, IDashStyle dashStyle)
         {
+            return BorderStyleFrom(thickness, dashStyle, false);
+        }
+
+        private static XLBorderStyleValues BorderStyleFrom(double thickness, IDashStyle dashStyle, bool doubleLine)
+        {
+            // A double border is a style of its own in Excel: the thickness and the dash pattern are
+            // not used, so this test comes first.
+            if (doubleLine)
+            {
+                return XLBorderStyleValues.Double;
+            }
+
             if (dashStyle != null)
             {
                 return XLBorderStyleValues.Dashed;

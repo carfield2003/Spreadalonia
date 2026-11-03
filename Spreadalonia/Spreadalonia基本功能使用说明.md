@@ -490,6 +490,143 @@ spreadsheet.CellMargin[(0, 0)] = new Thickness(3);                              
 spreadsheet.Refresh();   // 强制重绘（修改字典后调用）
 ```
 
+### 单元格文本装饰 / 自动换行 / 缩进（v1.11.0）
+
+下划线、删除线、自动换行和缩进都属于“单元格文本布局”，统一存放在 `CellTextStyles` 里（每格一个 `CellTextStyle` 条目）。缺省条目等同于“无装饰、不换行、无缩进”，所以不写就是旧行为。
+
+```csharp
+// 下划线 / 删除线（可组合：Underline | Strikethrough）
+spreadsheet.Selection = ImmutableList.Create(new SelectionRange(0, 0));   // A1
+spreadsheet.SetTextDecoration(CellTextDecoration.Underline);
+
+spreadsheet.SetTextDecoration(sheet, new SelectionRange(0, 1, 3, 1), CellTextDecoration.Strikethrough);
+spreadsheet.SetTextDecoration(CellTextDecoration.None);                   // 移除（不保留空条目）
+
+// 自动换行
+spreadsheet.SetWrap(true);                                                // 作用于当前选区
+spreadsheet.SetWrap(sheet, new SelectionRange(1, 4), true);
+
+// 缩进（单位 DIP；只影响左对齐，居中 / 右对齐不受影响）
+spreadsheet.SetIndent(20);
+
+// 查询
+CellTextDecoration d = spreadsheet.GetTextDecoration(0, 0);
+bool wrap = spreadsheet.GetWrap(0, 4);
+double indent = spreadsheet.GetIndent(2, 5);
+
+// 直接读写字典（修改后需要 Refresh()，且不入撤销栈）
+spreadsheet.CellTextStyles[(0, 0)] = new CellTextStyle(CellTextDecoration.Underline, wrap: false, indent: 0);
+spreadsheet.Refresh();
+```
+
+要点：
+
+- 合并单元格的样式取自锚点（左上）单元格，与对齐 / 字号等其它样式一致。
+- 换行后文本块按整格高度做垂直对齐；行高不会自动变高，需要配合 `AutoFitHeight()` 或手动 `SetHeight`。
+- 这些条目会随插入 / 删除行列一起平移，并支持撤销 / 重做；导出 xlsx 时会写成下划线、删除线、`WrapText` 与缩进。
+
+### 数字格式：千分位 / 货币 / 百分比（v1.11.0）
+
+```csharp
+spreadsheet.NumericCells[(0, 0)] = new NumericCell(2);                                          // 默认：1,234,567.89
+spreadsheet.NumericCells[(0, 1)] = new NumericCell(2) { ThousandsSeparator = false };           // 1234567.89
+spreadsheet.NumericCells[(0, 2)] = new NumericCell(2) { FormatKind = NumericFormatKind.Currency }; // ¥1,234,567.89
+spreadsheet.NumericCells[(0, 3)] = new NumericCell(2) { FormatKind = NumericFormatKind.Percent };  // 0.1234 -> 12.34%
+spreadsheet.NumericCells[(0, 4)] = new NumericCell(2) { FormatKind = NumericFormatKind.Currency, CurrencySymbol = "$" };
+```
+
+百分比的**存储值仍是比例**（`0.1234`），只有显示和 Excel 的数字格式会乘 100，因此单元格里的值始终可以参与计算。
+
+### 清空撤销历史
+
+```csharp
+spreadsheet.ClearUndoHistory();   // 新建 / 打开模板后调用
+```
+
+### 边框：双线与区间增删查（v1.11.0）
+
+```csharp
+// 双线（Excel 的 Double 样式）
+spreadsheet.AddCellBorder(new CellBorder(true, 0, 0, 4, Brushes.Black, 1) { DoubleLine = true });
+
+// 批量添加（只重绘一次；同位置同跨度会被替换）
+spreadsheet.AddCellBorders(new[] { outerTop, outerBottom, outerLeft, outerRight });
+
+// 查询与区域相交的线段（返回裁剪后的副本，改它不影响表格）
+IReadOnlyList<CellBorder> crossing = spreadsheet.GetCellBorders(new SelectionRange(2, 2, 3, 3));
+
+// 删除区域边框（部分重叠的线段会被裁成两段），返回受影响的线段数
+int removed = spreadsheet.RemoveCellBorders(2, 2, 3, 3);
+
+// 原子替换：先清选区边框再画新边框，整体是一个撤销步骤
+spreadsheet.SetCellBorders(2, 2, 3, 3, new[] { new CellBorder(true, 2, 2, 3, Brushes.Black, 2) });
+```
+
+区域边框对应的四条分隔线是：水平线 `Top`、`Bottom + 1`，垂直线 `Left`、`Right + 1`（与 `LineIndex` 语义一致）。
+
+### 右键菜单（v1.11.0）
+
+```csharp
+// 1) 接管右键：置 Handled = true 后内置菜单不弹，宿主自己弹
+spreadsheet.CellRightTapped += (s, e) =>
+{
+    if (e.Column == 0 && e.Row == 0)
+    {
+        e.Handled = true;
+        myMenu.Open(spreadsheet);     // 在鼠标位置弹自建菜单
+    }
+};
+
+// 2) 不接管，而是往内置菜单里追加条目 / 取消弹出
+spreadsheet.ContextMenuOpening += (s, e) =>
+{
+    if (e.Left < 0) { e.Cancel = true; return; }
+    e.ExtraItems.Add(new MenuItem { Header = "设置数字格式…" });
+};
+
+// 3) 直接调整内置菜单（只读属性，不要给 ContextMenu 赋值，那会替换整个菜单）
+spreadsheet.TableContextMenu.Opened += (s, e) => { /* ... */ };
+```
+
+### 编辑生命周期（v1.11.0）
+
+```csharp
+// 由公式栏等外部控件驱动编辑
+if (spreadsheet.BeginEdit(0, 0, "=A1+A2"))   // 第三个参数可省略：用单元格当前内容
+{
+    // ... 用户在公式栏输入 ...
+    spreadsheet.CommitEdit();                 // 写入 + 入撤销栈 + 抛 CellEditEnded
+    // 或
+    spreadsheet.CancelEdit();                 // 保持原值 + 抛 CellEditEnded(Cancelled = true)
+}
+
+bool editing = spreadsheet.IsEditingCell;
+(int column, int row) cell = spreadsheet.EditingCellPosition;   // 未编辑时为 (-1, -1)
+```
+
+只读单元格、`SuppressEdit` 的按钮单元格、隐藏行列会拒绝 `BeginEdit`（返回 `false`）。
+
+### 单元格装饰钩子（v1.11.0）
+
+```csharp
+public class FormulaMarker : ICellDecoration
+{
+    public void Draw(DrawingContext context, CellDrawInfo info)
+    {
+        if (!info.IsFormula) return;
+
+        // info.Bounds 是整格矩形，info.ContentBounds 是文字区域（均已在 region 坐标系下）
+        context.DrawRectangle(Brushes.Red, null,
+            new Rect(info.Bounds.Right - 6, info.Bounds.Top + 1, 5, 5));
+    }
+}
+
+spreadsheet.CellDecorations.Add(new FormulaMarker());
+spreadsheet.Refresh();
+```
+
+装饰绘制在文字之上、边框与选择框之下。列表属于控件而非工作表，切换工作表时不变。
+
 ---
 
 ## 剪贴板操作

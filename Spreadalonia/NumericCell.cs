@@ -25,6 +25,24 @@ using System.Globalization;
 namespace Spreadalonia
 {
     /// <summary>
+    /// The kind of number format applied to a <see cref="NumericCell"/>.
+    /// </summary>
+    public enum NumericFormatKind
+    {
+        /// <summary>A plain number (the default, and the behaviour before this enum existed).</summary>
+        Number = 0,
+
+        /// <summary>A currency amount: the value is prefixed with <see cref="NumericCell.CurrencySymbol"/>.</summary>
+        Currency = 1,
+
+        /// <summary>
+        /// A percentage. The stored value is the ratio (0.1234), the display is multiplied by 100 and
+        /// carries a percent sign, and the exported workbook gets the <c>0.00%</c> format.
+        /// </summary>
+        Percent = 2
+    }
+
+    /// <summary>
     /// Shared numeric formatting / parsing helpers. Both <see cref="NumericCell"/> and
     /// <see cref="NumericLinkCell"/> route through this class so that the two implementations
     /// can never drift apart.
@@ -78,17 +96,62 @@ namespace Spreadalonia
         /// <returns>The formatted display text.</returns>
         internal static string Format(string rawData, int digits, bool zeroAsEmpty)
         {
-            if (!TryParse(rawData, out decimal value))
+            return Format(rawData, digits, zeroAsEmpty, true, NumericFormatKind.Number, NumericCell.DefaultCurrencySymbol);
+        }
+
+        /// <summary>
+        /// Formats a raw cell value for display, honouring the thousand separator switch and the
+        /// number format kind (plain number, currency or percentage), and returns the parsed value
+        /// together with the display text.
+        /// </summary>
+        /// <param name="rawData">The raw string stored in the cell.</param>
+        /// <param name="digits">The number of decimal digits.</param>
+        /// <param name="zeroAsEmpty">Whether a zero value is displayed as an empty string.</param>
+        /// <param name="thousandsSeparator">Whether thousand separators are drawn.</param>
+        /// <param name="kind">The kind of number format.</param>
+        /// <param name="currencySymbol">The currency symbol used by <see cref="NumericFormatKind.Currency"/>.</param>
+        /// <returns>The formatted display text.</returns>
+        internal static string Format(string rawData, int digits, bool zeroAsEmpty, bool thousandsSeparator, NumericFormatKind kind, string currencySymbol)
+        {
+            if (!TryFormat(rawData, digits, zeroAsEmpty, thousandsSeparator, kind, currencySymbol, out string displayText, out _))
             {
                 return string.Empty;
+            }
+
+            return displayText;
+        }
+
+        /// <summary>
+        /// The single formatting entry point shared by the renderer (regular and merged cells) and
+        /// by the xlsx exporter, so that a cell can never look different on screen than in the
+        /// exported workbook.
+        /// </summary>
+        /// <param name="rawData">The raw string stored in the cell.</param>
+        /// <param name="digits">The number of decimal digits.</param>
+        /// <param name="zeroAsEmpty">Whether a zero value is displayed as an empty string.</param>
+        /// <param name="thousandsSeparator">Whether thousand separators are drawn.</param>
+        /// <param name="kind">The kind of number format.</param>
+        /// <param name="currencySymbol">The currency symbol used by <see cref="NumericFormatKind.Currency"/>.</param>
+        /// <param name="displayText">The formatted display text (empty when the value cannot be parsed).</param>
+        /// <param name="value">The parsed raw value (zero when the value cannot be parsed).</param>
+        /// <returns><see langword="true"/> when the raw value could be parsed as a number.</returns>
+        internal static bool TryFormat(string rawData, int digits, bool zeroAsEmpty, bool thousandsSeparator, NumericFormatKind kind, string currencySymbol, out string displayText, out decimal value)
+        {
+            displayText = string.Empty;
+            value = 0m;
+
+            if (!TryParse(rawData, out value))
+            {
+                return false;
             }
 
             if (zeroAsEmpty && value == 0m)
             {
-                return string.Empty;
+                return true;
             }
 
-            return FormatValue(value, digits);
+            displayText = FormatValue(value, digits, thousandsSeparator, kind, currencySymbol);
+            return true;
         }
 
         /// <summary>
@@ -99,13 +162,85 @@ namespace Spreadalonia
         /// <returns>The formatted display text.</returns>
         internal static string FormatValue(decimal value, int digits)
         {
+            return FormatValue(value, digits, true, NumericFormatKind.Number, NumericCell.DefaultCurrencySymbol);
+        }
+
+        /// <summary>
+        /// Formats an already parsed value for display, honouring the thousand separator switch and
+        /// the number format kind.
+        /// <para>
+        /// The value itself is never modified: a percentage is stored as its raw ratio (0.1234) and
+        /// only multiplied by 100 for display, so that the cell keeps a calculable value and the
+        /// exported workbook (which applies the <c>0.00%</c> format on its own) agrees with the
+        /// screen.
+        /// </para>
+        /// </summary>
+        /// <param name="value">The value to format.</param>
+        /// <param name="digits">The number of decimal digits.</param>
+        /// <param name="thousandsSeparator">Whether thousand separators are drawn.</param>
+        /// <param name="kind">The kind of number format.</param>
+        /// <param name="currencySymbol">The currency symbol used by <see cref="NumericFormatKind.Currency"/>.</param>
+        /// <returns>The formatted display text.</returns>
+        internal static string FormatValue(decimal value, int digits, bool thousandsSeparator, NumericFormatKind kind, string currencySymbol)
+        {
             if (digits < 0)
             {
                 digits = 0;
             }
 
-            string format = digits > 0 ? "#,#0." + new string('0', digits) : "#,#0";
-            return Round(value, digits).ToString(format, CultureInfo.CurrentCulture);
+            string decimals = digits > 0 ? "." + new string('0', digits) : string.Empty;
+            string group = thousandsSeparator ? "#,#0" : "0";
+
+            switch (kind)
+            {
+                case NumericFormatKind.Percent:
+                    // The stored value is the ratio; the screen shows it as a percentage. The percent
+                    // sign is appended by hand: a '%' inside a .NET numeric format string would make
+                    // ToString multiply the value by 100 a second time.
+                    // Scale first, then round: rounding the ratio to two digits would turn 0.1234
+                    // into 0.12 (i.e. 12.00%) instead of 12.34%.
+                    return Round(value * 100m, digits).ToString(group + decimals, CultureInfo.CurrentCulture) + "%";
+
+                case NumericFormatKind.Currency:
+                    string text = Round(value, digits).ToString(group + decimals, CultureInfo.CurrentCulture);
+                    return (currencySymbol ?? string.Empty) + text;
+
+                default:
+                    return Round(value, digits).ToString(group + decimals, CultureInfo.CurrentCulture);
+            }
+        }
+
+        /// <summary>
+        /// Builds the Excel number format string that corresponds to the given settings. It is used
+        /// by the xlsx exporter, so that the exported cell carries the same format as the screen.
+        /// </summary>
+        /// <param name="digits">The number of decimal digits.</param>
+        /// <param name="thousandsSeparator">Whether thousand separators are used.</param>
+        /// <param name="kind">The kind of number format.</param>
+        /// <param name="currencySymbol">The currency symbol used by <see cref="NumericFormatKind.Currency"/>.</param>
+        /// <returns>The Excel number format string.</returns>
+        internal static string GetNumberFormat(int digits, bool thousandsSeparator, NumericFormatKind kind, string currencySymbol)
+        {
+            if (digits < 0)
+            {
+                digits = 0;
+            }
+
+            string decimals = digits > 0 ? "." + new string('0', digits) : string.Empty;
+            string group = thousandsSeparator ? "#,##0" : "0";
+
+            switch (kind)
+            {
+                case NumericFormatKind.Percent:
+                    return group + decimals + "%";
+
+                case NumericFormatKind.Currency:
+                    // Excel treats the quoted symbol as a literal, next to the number.
+                    return "\"" + (currencySymbol ?? string.Empty) + "\"" + group + decimals;
+
+                default:
+                    return group + decimals;
+            }
         }
 
         /// <summary>
@@ -372,10 +507,31 @@ namespace Spreadalonia
         /// <summary>Reason code used when the typed value has more decimal digits than allowed.</summary>
         internal const string ReasonTooManyDecimals = "TooManyDecimals";
 
+        /// <summary>The currency symbol used when <see cref="CurrencySymbol"/> is not set.</summary>
+        internal const string DefaultCurrencySymbol = "¥";
+
         /// <summary>
         /// The number of decimal digits displayed (and enforced when editing).
         /// </summary>
         public int Digits { get; set; } = 2;
+
+        /// <summary>
+        /// Whether thousand separators are drawn. The default (<see langword="true"/>) is the
+        /// behaviour before this property existed, so an existing configuration keeps its format.
+        /// </summary>
+        public bool ThousandsSeparator { get; set; } = true;
+
+        /// <summary>
+        /// The kind of number format applied to the value: a plain number, a currency amount or a
+        /// percentage. For a percentage the stored value is the ratio (0.1234) and only the display
+        /// is multiplied by 100, so that the cell keeps a calculable value.
+        /// </summary>
+        public NumericFormatKind FormatKind { get; set; } = NumericFormatKind.Number;
+
+        /// <summary>
+        /// The symbol drawn in front of a <see cref="NumericFormatKind.Currency"/> value.
+        /// </summary>
+        public string CurrencySymbol { get; set; } = DefaultCurrencySymbol;
 
         /// <summary>
         /// Whether a zero (or empty) value is displayed as an empty string.
@@ -437,17 +593,22 @@ namespace Spreadalonia
         /// <returns>The formatted display text.</returns>
         public string GetDisplayText(string rawData)
         {
-            return NumberFormatter.Format(rawData, Digits, ZeroAsEmpty);
+            return NumberFormatter.Format(rawData, Digits, ZeroAsEmpty, ThousandsSeparator, FormatKind, CurrencySymbol);
         }
 
         /// <summary>
         /// The Excel number format that corresponds to <see cref="Digits"/> (thousands separators and a
         /// fixed number of decimals, e.g. <c>#,##0.00</c>). It is used both by the renderer and by the
         /// xlsx exporter, so that a cell looks the same on screen and in the exported workbook.
+        /// <para>
+        /// With the default settings (thousand separators on, <see cref="NumericFormatKind.Number"/>)
+        /// the result is exactly what the previous version produced, so an existing workbook keeps its
+        /// format.
+        /// </para>
         /// </summary>
         public string GetNumberFormat()
         {
-            return Digits > 0 ? "#,##0." + new string('0', Digits) : "#,##0";
+            return NumberFormatter.GetNumberFormat(Digits, ThousandsSeparator, FormatKind, CurrencySymbol);
         }
 
         /// <summary>

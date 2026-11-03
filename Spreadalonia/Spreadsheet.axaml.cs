@@ -1,4 +1,4 @@
-/*
+﻿/*
     Spreadalonia - A spreadsheet control for Avalonia
     Copyright (C) 2023  Giorgio Bianchini, University of Bristol
  
@@ -142,7 +142,7 @@ namespace Spreadalonia
         /// <summary>
         /// Defines the <see cref="Data"/> property.
         /// </summary>
-        public static readonly DirectProperty<Spreadsheet, Dictionary<(int, int), string>> DataProperty = AvaloniaProperty.RegisterDirect<Spreadsheet, Dictionary<(int, int), string>>(nameof(HeaderFontFamily), o => o.Data);
+        public static readonly DirectProperty<Spreadsheet, Dictionary<(int, int), string>> DataProperty = AvaloniaProperty.RegisterDirect<Spreadsheet, Dictionary<(int, int), string>>(nameof(Data), o => o.Data);
 
         /// <summary>
         /// The data contained in the spreadsheet. Please do not change this directly, or you will mess up the Undo/Redo stack.
@@ -704,6 +704,126 @@ namespace Spreadalonia
         public event EventHandler<SheetMovedEventArgs> SheetMoved;
 
         /// <summary>
+        /// Raised when the cells are right clicked, after the selection has been resolved (so
+        /// <see cref="CellRightTappedEventArgs.Column"/> and <see cref="CellRightTappedEventArgs.Row"/>
+        /// already point at the anchor cell of a merged range).
+        /// <para>
+        /// Setting <see cref="CellRightTappedEventArgs.Handled"/> prevents the built-in context menu
+        /// from opening, which is how a host that wants its own menu takes the click over: open the
+        /// menu from the handler instead of replacing <see cref="ContextMenu"/>.
+        /// </para>
+        /// </summary>
+        public event EventHandler<CellRightTappedEventArgs> CellRightTapped;
+
+        /// <summary>
+        /// Raised just before the built-in context menu of the spreadsheet is opened. Setting
+        /// <see cref="ContextMenuOpeningEventArgs.Cancel"/> keeps the menu closed; entries added to
+        /// <see cref="ContextMenuOpeningEventArgs.ExtraItems"/> are appended to it for the time the
+        /// menu is open.
+        /// <para>
+        /// The event is raised synchronously, before the built-in handler does any asynchronous work,
+        /// so that cancelling the menu takes effect immediately.
+        /// </para>
+        /// </summary>
+        public event EventHandler<ContextMenuOpeningEventArgs> ContextMenuOpening;
+
+        /// <summary>
+        /// The built-in context menu of the spreadsheet, so that a host can add entries to it or
+        /// adjust them. Assigning to <see cref="ContextMenu"/> instead replaces the whole menu and
+        /// disables the built-in behaviour.
+        /// </summary>
+        public ContextMenu TableContextMenu => this.TableContextMenuControl;
+
+        /// <summary>
+        /// The host supplied decorations, drawn on top of the content of every cell and below its
+        /// border and the selection frame. A typical use is a marker in the corner of a formula cell
+        /// or a highlight on the cells that have been changed since the last save.
+        /// <para>
+        /// The list belongs to the control, not to a worksheet, so the same decorations are drawn
+        /// while switching worksheets. Add a decoration and call <see cref="Refresh"/> (or wait for
+        /// the next repaint); removing one only needs a repaint.
+        /// </para>
+        /// </summary>
+        public List<ICellDecoration> CellDecorations { get; } = new List<ICellDecoration>();
+
+        /// <summary>
+        /// Raises <see cref="ContextMenuOpening"/> for the current selection, appends the entries the
+        /// host supplied and reports whether the menu has to stay closed.
+        /// </summary>
+        /// <param name="cancelArgs">
+        /// The arguments of the <see cref="ContextMenu.Opening"/> event of the built-in menu; their
+        /// <see cref="System.ComponentModel.CancelEventArgs.Cancel"/> is set when the host cancels.
+        /// </param>
+        /// <param name="hostMenuItems">The list the appended host entries are recorded in.</param>
+        /// <returns><see langword="true"/> when the built-in menu has to stay closed.</returns>
+        private bool RaiseContextMenuOpening(System.ComponentModel.CancelEventArgs cancelArgs, List<object> hostMenuItems)
+        {
+            EventHandler<ContextMenuOpeningEventArgs> openingHandler = this.ContextMenuOpening;
+
+            if (openingHandler == null)
+            {
+                return false;
+            }
+
+            ContextMenuOpeningEventArgs hostArgs = new ContextMenuOpeningEventArgs(
+                this.Selection.Count > 0 ? this.Selection[0].Left : 0,
+                this.Selection.Count > 0 ? this.Selection[0].Top : 0);
+
+            openingHandler(this, hostArgs);
+
+            if (hostArgs.Cancel)
+            {
+                if (cancelArgs != null)
+                {
+                    cancelArgs.Cancel = true;
+                }
+
+                return true;
+            }
+
+            foreach (object item in hostArgs.ExtraItems)
+            {
+                if (item != null)
+                {
+                    TableContextMenuControl.Items.Add(item);
+                    hostMenuItems?.Add(item);
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Runs the same work the <see cref="ContextMenu.Opening"/> handler of the built-in menu does
+        /// for the host facing part, so that a test (or a host that opens the menu itself) can check
+        /// the <see cref="ContextMenuOpening"/> event without a real pointer event.
+        /// </summary>
+        /// <param name="cancelArgs">
+        /// Receives <see cref="System.ComponentModel.CancelEventArgs.Cancel"/> when the host cancels.
+        /// </param>
+        internal void RaiseContextMenuOpeningForTest(System.ComponentModel.CancelEventArgs cancelArgs)
+        {
+            this.RaiseContextMenuOpening(cancelArgs, null);
+        }
+
+        /// <summary>
+        /// Raises <see cref="CellRightTapped"/> and returns whether the host handled the click.
+        /// </summary>
+        internal bool RaiseCellRightTapped(int column, int row, KeyModifiers modifiers)
+        {
+            EventHandler<CellRightTappedEventArgs> handler = this.CellRightTapped;
+
+            if (handler == null)
+            {
+                return false;
+            }
+
+            CellRightTappedEventArgs args = new CellRightTappedEventArgs(column, row, modifiers);
+            handler(this, args);
+            return args.Handled;
+        }
+
+        /// <summary>
         /// Removes the specified worksheet from the spreadsheet. The last worksheet cannot be
         /// removed.
         /// </summary>
@@ -1206,6 +1326,21 @@ namespace Spreadalonia
         }
 
         /// <summary>
+        /// The text layout of each cell of the displayed worksheet (decorations, automatic wrapping and
+        /// indentation), indexed by (column, row). A cell that is not present is drawn with no
+        /// decoration, no wrapping and no indentation.
+        /// <para>
+        /// Changing this dictionary directly does not repaint the sheet and is not recorded on the
+        /// undo stack; use <see cref="SetTextDecoration"/>, <see cref="SetWrap"/> and
+        /// <see cref="SetIndent"/> instead, or call <see cref="Refresh"/> afterwards.
+        /// </para>
+        /// </summary>
+        public Dictionary<(int, int), CellTextStyle> CellTextStyles
+        {
+            get { return IsInitialized ? ContentTable.CellTextStyles : null; }
+        }
+
+        /// <summary>
         /// The font size of each cell, indexed by (column, row). Cells not present in this
         /// dictionary use the spreadsheet <see cref="FontSize"/>.
         /// </summary>
@@ -1662,6 +1797,157 @@ namespace Spreadalonia
             {
                 ContentTable.ClearCellBorders();
             }
+        }
+
+        /// <summary>
+        /// Adds several border line segments of the displayed worksheet, with a single redraw. A
+        /// segment that already exists (same orientation, separator and span) is replaced.
+        /// <para>
+        /// Like the other direct formatting calls, this does not record an undo step; use
+        /// <see cref="SetCellBorders(int, int, int, int, IEnumerable{CellBorder})"/> when the change
+        /// has to be undoable.
+        /// </para>
+        /// </summary>
+        /// <param name="borders">The border segments to add.</param>
+        public void AddCellBorders(IEnumerable<CellBorder> borders)
+        {
+            if (IsInitialized)
+            {
+                ContentTable.AddCellBorders(borders);
+            }
+        }
+
+        /// <summary>
+        /// Removes the border segments of the displayed worksheet that cross a range, trimming the
+        /// ones that only partially overlap it (a segment that runs past the range keeps the parts
+        /// outside it). The segments of the four outer edges of the range are the ones affected.
+        /// <para>
+        /// Like the other direct formatting calls, this does not record an undo step.
+        /// </para>
+        /// </summary>
+        /// <param name="range">The range whose border segments are removed.</param>
+        /// <returns>The number of segments that were removed.</returns>
+        public int RemoveCellBorders(SelectionRange range)
+        {
+            return IsInitialized ? ContentTable.RemoveCellBorders(range) : 0;
+        }
+
+        /// <summary>
+        /// Removes the border segments of the displayed worksheet that cross a range, given by its
+        /// coordinates.
+        /// </summary>
+        /// <param name="left">The first column of the range.</param>
+        /// <param name="top">The first row of the range.</param>
+        /// <param name="right">The last column of the range.</param>
+        /// <param name="bottom">The last row of the range.</param>
+        /// <returns>The number of segments that were removed.</returns>
+        public int RemoveCellBorders(int left, int top, int right, int bottom)
+        {
+            return this.RemoveCellBorders(new SelectionRange(left, top, right, bottom));
+        }
+
+        /// <summary>
+        /// Returns the border segments of the displayed worksheet that cross a range, trimmed to it.
+        /// The segments are copies, so editing them does not change the worksheet.
+        /// </summary>
+        /// <param name="range">The range whose border segments are returned.</param>
+        /// <returns>The trimmed copies of the segments that cross the range.</returns>
+        public IReadOnlyList<CellBorder> GetCellBorders(SelectionRange range)
+        {
+            return IsInitialized ? ContentTable.GetCellBorders(range) : new List<CellBorder>();
+        }
+
+        /// <summary>
+        /// Returns the border segments of the displayed worksheet that cross a range, given by its
+        /// coordinates.
+        /// </summary>
+        /// <param name="left">The first column of the range.</param>
+        /// <param name="top">The first row of the range.</param>
+        /// <param name="right">The last column of the range.</param>
+        /// <param name="bottom">The last row of the range.</param>
+        /// <returns>The trimmed copies of the segments that cross the range.</returns>
+        public IReadOnlyList<CellBorder> GetCellBorders(int left, int top, int right, int bottom)
+        {
+            return this.GetCellBorders(new SelectionRange(left, top, right, bottom));
+        }
+
+        /// <summary>
+        /// Replaces the border segments that cross a range of the displayed worksheet by the given
+        /// ones, as one undoable step: the previous list is restored by <see cref="Undo"/>.
+        /// </summary>
+        /// <param name="range">The range whose existing segments are removed.</param>
+        /// <param name="borders">The segments to add.</param>
+        public void SetCellBorders(SelectionRange range, IEnumerable<CellBorder> borders)
+        {
+            if (range == null)
+            {
+                return;
+            }
+
+            this.SetCellBorders(range.Left, range.Top, range.Right, range.Bottom, borders);
+        }
+
+        /// <summary>
+        /// Replaces the border segments that cross a range of the displayed worksheet by the given
+        /// ones, as one undoable step.
+        /// </summary>
+        /// <param name="left">The first column of the range.</param>
+        /// <param name="top">The first row of the range.</param>
+        /// <param name="right">The last column of the range.</param>
+        /// <param name="bottom">The last row of the range.</param>
+        /// <param name="borders">The segments to add.</param>
+        public void SetCellBorders(int left, int top, int right, int bottom, IEnumerable<CellBorder> borders)
+        {
+            if (!IsInitialized)
+            {
+                return;
+            }
+
+            Table table = ContentTable;
+            SelectionRange range = new SelectionRange(left, top, right, bottom);
+
+            // A snapshot of both sides, so that the undo step can restore the list exactly (the
+            // borders are mutable objects, so the copies have to be deep).
+            List<CellBorder> previous = new List<CellBorder>(table.CellBorders.Count);
+
+            foreach (CellBorder border in table.CellBorders)
+            {
+                if (border != null)
+                {
+                    previous.Add(border.Clone());
+                }
+            }
+
+            table.SetCellBorders(range, borders);
+
+            List<CellBorder> current = new List<CellBorder>(table.CellBorders.Count);
+
+            foreach (CellBorder border in table.CellBorders)
+            {
+                if (border != null)
+                {
+                    current.Add(border.Clone());
+                }
+            }
+
+            this.PushBorderSnapshot(previous, current);
+        }
+
+        /// <summary>
+        /// Pushes a whole-list border snapshot onto the undo stack, with a placeholder on every other
+        /// stack so that all of them stay at the same depth.
+        /// </summary>
+        /// <param name="previous">The border list before the change.</param>
+        /// <param name="current">The border list after the change.</param>
+        private void PushBorderSnapshot(List<CellBorder> previous, List<CellBorder> current)
+        {
+            this.UndoStackCellBorders.Push(new CellBorderSnapshot(previous, current));
+
+            this.UndoStack.Push(null);
+            this.PushNonDataStackNullExceptBorders();
+            this.ClearRedoStack();
+
+            ContentTable.InvalidateVisual();
         }
 
         /// <summary>
@@ -2269,6 +2555,13 @@ namespace Spreadalonia
         internal Stack<StackFrame<(int, int), ButtonCell>> UndoStackButtonCell { get; } = new Stack<StackFrame<(int, int), ButtonCell>>();
         internal Stack<StackFrame<(int, int), TreeGradeCell>> UndoStackTreeCell { get; } = new Stack<StackFrame<(int, int), TreeGradeCell>>();
         internal Stack<StackFrame<(int, int), NumericCell>> UndoStackNumericCell { get; } = new Stack<StackFrame<(int, int), NumericCell>>();
+        internal Stack<StackFrame<(int, int), CellTextStyle>> UndoStackCellTextStyles { get; } = new Stack<StackFrame<(int, int), CellTextStyle>>();
+
+        // The border range API replaces the whole border list at once, so it uses a snapshot stack
+        // rather than the per-cell frames of the formatting stacks.
+        internal Stack<CellBorderSnapshot> UndoStackCellBorders { get; } = new Stack<CellBorderSnapshot>();
+
+
 
 
         internal Stack<StackFrame<(int, int), string>> RedoStack { get; } = new Stack<StackFrame<(int, int), string>>();
@@ -2290,6 +2583,10 @@ namespace Spreadalonia
         internal Stack<StackFrame<(int, int), ButtonCell>> RedoStackButtonCell { get; } = new Stack<StackFrame<(int, int), ButtonCell>>();
         internal Stack<StackFrame<(int, int), TreeGradeCell>> RedoStackTreeCell { get; } = new Stack<StackFrame<(int, int), TreeGradeCell>>();
         internal Stack<StackFrame<(int, int), NumericCell>> RedoStackNumericCell { get; } = new Stack<StackFrame<(int, int), NumericCell>>();
+        internal Stack<StackFrame<(int, int), CellTextStyle>> RedoStackCellTextStyles { get; } = new Stack<StackFrame<(int, int), CellTextStyle>>();
+        internal Stack<CellBorderSnapshot> RedoStackCellBorders { get; } = new Stack<CellBorderSnapshot>();
+
+
 
         /// <summary>
         /// Create a new <see cref="Spreadsheet"/> instance.
@@ -2311,6 +2608,10 @@ namespace Spreadalonia
             VerticalHeaderControl.Owner = ContentTable;
             TopLeftCornerControl.Owner = ContentTable;
             IconOverlay.Owner = ContentTable;
+
+            // The host decorations belong to the control, so they survive a worksheet switch.
+            ContentTable.CellDecorations = this.CellDecorations;
+
 
             HorizontalScrollBar.SmallChange = ContentTable.DefaultColumnWidth;
             HorizontalScrollBar.LargeChange = ContentTable.DefaultColumnWidth * 3;
@@ -2485,121 +2786,16 @@ namespace Spreadalonia
 
             EditingBox.LostFocus += (s, e) =>
             {
+                // The guard makes the automatic commit a no-op once CommitEdit() / CancelEdit() has
+                // already closed the editing session.
                 if (IsEditing)
                 {
-                    string attemptedText = cancelledEditAttempt ?? EditingBox.Text;
-                    string newText = attemptedText;
-
-                    bool cancelled = editCancelled;
-                    bool rejected = false;
-                    editCancelled = false;
-                    cancelledEditAttempt = null;
-
-                    bool present = ContentTable.Data.TryGetValue(this.EditingCell, out string prevVal);
-
-                    // Numeric cells validate on commit: an invalid value is rejected, the cell
-                    // keeps its previous content and nothing is pushed onto the Undo stack.
-                    if (!cancelled && editingNumericCell != null)
-                    {
-                        if (editingNumericCell.TryValidate(newText, out string normalized, out string error))
-                        {
-                            newText = normalized ?? "";
-                        }
-                        else
-                        {
-                            this.RaiseInvalidInput(this.EditingCell.Item1, this.EditingCell.Item2, newText, error);
-                            cancelled = true;
-                            rejected = true;
-                            newText = prevVal ?? "";
-                        }
-                    }
-
-                    if (cancelled)
-                    {
-                        newText = prevVal ?? "";
-                    }
-
-                    bool wasFormula = ContentTable.FormulaCells != null &&
-                                      ContentTable.FormulaCells.ContainsKey(this.EditingCell);
-
-                    if ((present && prevVal != newText) || (!present && !string.IsNullOrEmpty(newText)))
-                    {
-                        // Handle formula cells
-                        if (newText.StartsWith("=") && newText.Length > 1)
-                        {
-                            string formula = newText.Substring(1);
-                            var result = this.FormulaEngine.Evaluate(this.EditingCell, formula);
-
-                            // Store raw formula text in Data for serialization
-                            var newData = new Dictionary<(int, int), string>() { { this.EditingCell, newText } };
-                            var prevData = new Dictionary<(int, int), string>();
-                            if (present) prevData[this.EditingCell] = prevVal;
-                            else prevData[this.EditingCell] = null;
-
-                            this.UndoStack.Push(new StackFrame<(int, int), string>(
-                                ImmutableList.Create(new SelectionRange(this.EditingCell)),
-                                prevData, newData));
-                            ContentTable.Data[this.EditingCell] = newText;
-
-                            // Store formula result for display
-                            ContentTable.FormulaCells[this.EditingCell] = result;
-
-                            // Trigger cascade recalculation
-                            var cascadeResults = this.FormulaEngine.CascadeRecalculate(this.EditingCell);
-                            foreach (var kvp in cascadeResults)
-                            {
-                                ContentTable.FormulaCells[kvp.Key] = kvp.Value;
-                            }
-                        }
-                        else
-                        {
-                            // Plain text cell
-                            if (!string.IsNullOrEmpty(newText))
-                            {
-                                this.UndoStack.Push(new StackFrame<(int, int), string>(
-                                    ImmutableList.Create(new SelectionRange(this.EditingCell)),
-                                    new Dictionary<(int, int), string>() { { this.EditingCell, prevVal } },
-                                    new Dictionary<(int, int), string>() { { this.EditingCell, newText } }));
-                                ContentTable.Data[this.EditingCell] = newText;
-                            }
-                            else
-                            {
-                                this.UndoStack.Push(new StackFrame<(int, int), string>(
-                                    ImmutableList.Create(new SelectionRange(this.EditingCell)),
-                                    new Dictionary<(int, int), string>() { { this.EditingCell, prevVal } },
-                                    new Dictionary<(int, int), string>() { { this.EditingCell, null } }));
-                                ContentTable.Data.Remove(this.EditingCell);
-                            }
-
-                            // If this was a formula cell, remove formula data from engine
-                            if (wasFormula)
-                            {
-                                ContentTable.FormulaCells.Remove(this.EditingCell);
-                                this.FormulaEngine.RemoveCell(this.EditingCell);
-                            }
-
-                            // Always trigger cascade recalculation: formula cells that
-                            // reference this cell need to be updated with the new value.
-                            var cascadeResults = this.FormulaEngine.CascadeRecalculate(this.EditingCell);
-                            foreach (var kvp in cascadeResults)
-                            {
-                                ContentTable.FormulaCells[kvp.Key] = kvp.Value;
-                            }
-                        }
-
-                        this.PushNonDataStackNull();
-                        this.ClearRedoStack();
-                    }
-
-                    IsEditing = false;
-                    ContentTable.InvalidateVisual();
-
-                    this.RaiseCellEditEnded(this.EditingCell.Item1, this.EditingCell.Item2, prevVal,
-                        cancelled ? attemptedText : newText, cancelled, rejected);
-
-                    editingNumericCell = null;
+                    this.CommitEditCore();
                 }
             };
+
+            // The rest of the editing box wiring follows below (key handling, ...).
+
 
             EditingBox.KeyDown += (s, e) =>
             {
@@ -2660,8 +2856,29 @@ namespace Spreadalonia
                 }
             };
 
-            TableContextMenu.Opening += async (s, e) =>
+            // Any host entries added to an earlier opening are removed when the menu closes; keeping
+            // track of them here means a second opening never appends the same item twice.
+            List<object> hostMenuItems = new List<object>();
+
+            TableContextMenuControl.Closed += (s, e) =>
             {
+                foreach (object item in hostMenuItems)
+                {
+                    TableContextMenuControl.Items.Remove(item);
+                }
+
+                hostMenuItems.Clear();
+            };
+
+            TableContextMenuControl.Opening += async (s, e) =>
+            {
+                // The host is asked synchronously, before any await below: the menu is already being
+                // opened, so a Cancel that arrives later would have no effect.
+                if (this.RaiseContextMenuOpening(e, hostMenuItems))
+                {
+                    return;
+                }
+
                 CopyMenuItem.IsEnabled = this.Selection.Count > 0;
                 CutMenuItem.IsEnabled = this.Selection.Count > 0;
 
@@ -3831,6 +4048,22 @@ namespace Spreadalonia
                 this.RedoStackButtonCell.Push(this.PopOptional<ButtonCell>(this.UndoStackButtonCell, table.ButtonCells, true, ref selection));
                 this.RedoStackTreeCell.Push(this.PopOptional<TreeGradeCell>(this.UndoStackTreeCell, table.TreeCells, true, ref selection));
                 this.RedoStackNumericCell.Push(this.PopOptional<NumericCell>(this.UndoStackNumericCell, table.NumericCells, true, ref selection));
+                this.RedoStackCellTextStyles.Push(this.UndoStackCellTextStyles.Count > 0 ? this.UndoStackCellTextStyles.Pop(table.CellTextStyles, true, ref selection) : null);
+
+                CellBorderSnapshot borderSnapshot = this.UndoStackCellBorders.Count > 0 ? this.UndoStackCellBorders.Pop() : null;
+
+                if (borderSnapshot != null)
+                {
+                    table.CellBorders.Clear();
+                    table.CellBorders.AddRange(borderSnapshot.Previous);
+                    this.RedoStackCellBorders.Push(borderSnapshot);
+                }
+                else
+                {
+                    this.RedoStackCellBorders.Push(null);
+                }
+
+
 
                 if (selection != null)
                 {
@@ -3880,6 +4113,22 @@ namespace Spreadalonia
                 this.UndoStackButtonCell.Push(this.PopOptional<ButtonCell>(this.RedoStackButtonCell, table.ButtonCells, false, ref selection));
                 this.UndoStackTreeCell.Push(this.PopOptional<TreeGradeCell>(this.RedoStackTreeCell, table.TreeCells, false, ref selection));
                 this.UndoStackNumericCell.Push(this.PopOptional<NumericCell>(this.RedoStackNumericCell, table.NumericCells, false, ref selection));
+                this.UndoStackCellTextStyles.Push(this.RedoStackCellTextStyles.Count > 0 ? this.RedoStackCellTextStyles.Pop(table.CellTextStyles, false, ref selection) : null);
+
+                CellBorderSnapshot redoBorderSnapshot = this.RedoStackCellBorders.Count > 0 ? this.RedoStackCellBorders.Pop() : null;
+
+                if (redoBorderSnapshot != null)
+                {
+                    table.CellBorders.Clear();
+                    table.CellBorders.AddRange(redoBorderSnapshot.Current);
+                    this.UndoStackCellBorders.Push(redoBorderSnapshot);
+                }
+                else
+                {
+                    this.UndoStackCellBorders.Push(null);
+                }
+
+
 
                 if (selection != null)
                 {
@@ -4001,12 +4250,53 @@ namespace Spreadalonia
         /// </summary>
         internal void PushExtraCellStackNull()
         {
+            this.PushExtraCellStackNull(true);
+        }
+
+        /// <summary>
+        /// Pushes a placeholder frame onto the extra cell-keyed stacks.
+        /// </summary>
+        /// <param name="includeTextStyles">
+        /// Whether the text style stack is included. A text-layout operation passes
+        /// <see langword="false"/> because it pushes a real frame onto that stack itself.
+        /// </param>
+        private void PushExtraCellStackNull(bool includeTextStyles)
+        {
             this.UndoStackCellFontSize.Push(null);
             this.UndoStackTitleCell.Push(null);
             this.UndoStackLinkCell.Push(null);
             this.UndoStackButtonCell.Push(null);
             this.UndoStackTreeCell.Push(null);
             this.UndoStackNumericCell.Push(null);
+
+            if (includeTextStyles)
+            {
+                this.UndoStackCellTextStyles.Push(null);
+            }
+        }
+
+        /// <summary>
+        /// Pushes a placeholder onto every stack except the border snapshot stack, so that an
+        /// operation that owns a border snapshot (and has already pushed it) keeps all the stacks
+        /// at the same depth.
+        /// </summary>
+        internal void PushNonDataStackNullExceptBorders()
+        {
+            this.UndoStackRowForeground.Push(null);
+            this.UndoStackRowHeight.Push(null);
+            this.UndoStackRowTypeface.Push(null);
+
+            this.UndoStackColumnForeground.Push(null);
+            this.UndoStackColumnWidth.Push(null);
+            this.UndoStackColumnTypeface.Push(null);
+
+            this.UndoStackCellForeground.Push(null);
+            this.UndoStackCellMargin.Push(null);
+            this.UndoStackCellHorizontalAlignment.Push(null);
+            this.UndoStackCellTypeface.Push(null);
+            this.UndoStackCellVerticalAlignment.Push(null);
+
+            this.PushExtraCellStackNull();
         }
 
         internal void PushNonDataStackNull()
@@ -4026,8 +4316,90 @@ namespace Spreadalonia
             this.UndoStackCellVerticalAlignment.Push(null);
 
             // The extra cell-keyed collections are kept in lockstep with the ones above, so that a
-            // frame pushed by an operation that does not touch them still pops as a no-op.
-            this.PushExtraCellStackNull();
+            // frame pushed by an operation that does not touch them still pops as a no-op. This
+            // includes the text style stack.
+            this.PushExtraCellStackNull(true);
+
+            // The border snapshot stack is not cell-keyed (it holds the whole list), but it has to
+            // follow the same depth.
+            this.UndoStackCellBorders.Push(null);
+        }
+
+        /// <summary>
+        /// Pushes a placeholder frame onto every undo stack that a text-layout operation does not
+        /// touch, so that this one stack can carry the real frame of the operation. This is the same
+        /// as <see cref="PushNonDataStackNull"/> without the text style stack, which is exactly what
+        /// an operation that writes that stack needs.
+        /// </summary>
+        private void PushNonTextStyleStackNull()
+        {
+            this.UndoStackRowForeground.Push(null);
+            this.UndoStackRowHeight.Push(null);
+            this.UndoStackRowTypeface.Push(null);
+
+            this.UndoStackColumnForeground.Push(null);
+            this.UndoStackColumnWidth.Push(null);
+            this.UndoStackColumnTypeface.Push(null);
+
+            this.UndoStackCellForeground.Push(null);
+            this.UndoStackCellMargin.Push(null);
+            this.UndoStackCellHorizontalAlignment.Push(null);
+            this.UndoStackCellTypeface.Push(null);
+            this.UndoStackCellVerticalAlignment.Push(null);
+            this.UndoStackCellFontSize.Push(null);
+
+            // The caller (the text layout setter) owns the text style stack, so it is not touched
+            // here; the remaining extra stacks still get their placeholder.
+            this.UndoStackTitleCell.Push(null);
+            this.UndoStackLinkCell.Push(null);
+            this.UndoStackButtonCell.Push(null);
+            this.UndoStackTreeCell.Push(null);
+            this.UndoStackNumericCell.Push(null);
+            this.UndoStackCellBorders.Push(null);
+        }
+
+        /// <summary>
+        /// Pushes a placeholder onto every undo stack except the ones the caller has already pushed a
+        /// real frame onto, so that all of them stay at the same depth.
+        /// </summary>
+        /// <param name="fontSize">Whether the caller owns the font size stack.</param>
+        /// <param name="margin">Whether the caller owns the cell margin stack.</param>
+        private void PushStackNullExcept(bool fontSize, bool margin)
+        {
+            this.UndoStackRowForeground.Push(null);
+            this.UndoStackRowHeight.Push(null);
+            this.UndoStackRowTypeface.Push(null);
+
+            this.UndoStackColumnForeground.Push(null);
+            this.UndoStackColumnWidth.Push(null);
+            this.UndoStackColumnTypeface.Push(null);
+
+            this.UndoStackCellForeground.Push(null);
+            this.UndoStackCellHorizontalAlignment.Push(null);
+            this.UndoStackCellTypeface.Push(null);
+            this.UndoStackCellVerticalAlignment.Push(null);
+
+            if (!fontSize)
+            {
+                this.UndoStackCellFontSize.Push(null);
+            }
+
+            if (!margin)
+            {
+                this.UndoStackCellMargin.Push(null);
+            }
+
+            // The remaining extra cell-keyed stacks and the border snapshot stack always get a
+            // placeholder: none of them is owned by the setters that use this helper. Note that this
+            // cannot delegate to PushExtraCellStackNull, which unconditionally pushes the font size
+            // stack as well.
+            this.UndoStackTitleCell.Push(null);
+            this.UndoStackLinkCell.Push(null);
+            this.UndoStackButtonCell.Push(null);
+            this.UndoStackTreeCell.Push(null);
+            this.UndoStackNumericCell.Push(null);
+            this.UndoStackCellTextStyles.Push(null);
+            this.UndoStackCellBorders.Push(null);
         }
 
         internal void ClearRedoStack()
@@ -4054,9 +4426,340 @@ namespace Spreadalonia
             this.RedoStackButtonCell.Clear();
             this.RedoStackTreeCell.Clear();
             this.RedoStackNumericCell.Clear();
+            this.RedoStackCellTextStyles.Clear();
+            this.RedoStackCellBorders.Clear();
 
             this.CanUndo = this.UndoStack.Count > 0;
             this.CanRedo = this.RedoStack.Count > 0;
+        }
+
+        /// <summary>
+        /// Sets the font size of the current selection, as one undoable step.
+        /// </summary>
+        /// <param name="fontSize">The font size, in device-independent pixels.</param>
+        public void SetFontSize(double fontSize)
+        {
+            if (!IsInitialized || this.Selection.Count == 0 || fontSize <= 0)
+            {
+                return;
+            }
+
+            Table table = ContentTable;
+
+            table.CellFontSize.SetValue(this.Selection, fontSize, this.UndoStackCellFontSize);
+
+            this.UndoStack.Push(null);
+            this.PushStackNullExcept(true, false);
+            this.ClearRedoStack();
+            table.InvalidateVisual();
+        }
+
+        /// <summary>
+        /// Sets the cell margin of the current selection, as one undoable step.
+        /// </summary>
+        /// <param name="margin">The margin to apply.</param>
+        public void SetCellMargin(Thickness margin)
+        {
+            if (!IsInitialized || this.Selection.Count == 0)
+            {
+                return;
+            }
+
+            Table table = ContentTable;
+
+            table.CellMargin.SetValue(this.Selection.Where(x => x.IsFinite(table)), margin, this.UndoStackCellMargin);
+
+            this.UndoStack.Push(null);
+            this.PushStackNullExcept(false, true);
+            this.ClearRedoStack();
+            table.InvalidateVisual();
+        }
+
+        /// <summary>
+        /// Sets the height of one row, as one undoable step.
+        /// </summary>
+        /// <param name="row">The row to resize.</param>
+        /// <param name="height">The new height, in device-independent pixels.</param>
+        public void SetRowHeight(int row, double height)
+        {
+            if (!IsInitialized || row < 0 || height <= 0)
+            {
+                return;
+            }
+
+            this.SetHeight(new Dictionary<int, double> { [row] = height });
+        }
+
+        /// <summary>
+        /// Sets the width of one column, as one undoable step.
+        /// </summary>
+        /// <param name="column">The column to resize.</param>
+        /// <param name="width">The new width, in device-independent pixels.</param>
+        public void SetColumnWidth(int column, double width)
+        {
+            if (!IsInitialized || column < 0 || width <= 0)
+            {
+                return;
+            }
+
+            this.SetWidth(new Dictionary<int, double> { [column] = width });
+        }
+
+        /// <summary>
+        /// Starts editing the specified cell, without the user having to double click it. The editing
+        /// box is filled with <paramref name="initialText"/> (or with the current content of the cell
+        /// when it is <see langword="null"/>) and receives the focus.
+        /// <para>
+        /// The call is refused (and returns <see langword="false"/>) for a cell that cannot be
+        /// edited: a read-only cell, a cell whose editing is suppressed (a button cell), a hidden
+        /// row or column, or a cell outside the table.
+        /// </para>
+        /// </summary>
+        /// <param name="column">The column of the cell.</param>
+        /// <param name="row">The row of the cell.</param>
+        /// <param name="initialText">The text to start with, or <see langword="null"/> for the current content.</param>
+        /// <returns><see langword="true"/> when the edit has started.</returns>
+        public bool BeginEdit(int column, int row, string initialText = null)
+        {
+            Table table = ContentTable;
+
+            if (!IsInitialized || table == null)
+            {
+                return false;
+            }
+
+            if (column < 0 || row < 0 || column > table.MaxTableWidth || row > table.MaxTableHeight)
+            {
+                return false;
+            }
+
+            if (table.IsColumnHidden(column) || table.IsRowHidden(row))
+            {
+                return false;
+            }
+
+            if (table.IsCellReadonly(column, row) || table.IsCellEditSuppressed(column, row))
+            {
+                return false;
+            }
+
+            // A previous edit is committed first, exactly as clicking another cell would do.
+            if (IsEditing)
+            {
+                this.CommitEdit();
+            }
+
+            // EditingCell has to be set before IsEditing, because the IsEditing setter reads it.
+            this.EditingCell = (column, row);
+            this.Selection = ImmutableList.Create(new SelectionRange(column, row));
+
+            this.editingNumericCell = table.NumericCells != null && table.NumericCells.TryGetValue((column, row), out NumericCell numericCell) ? numericCell : null;
+            this.cancelledEditAttempt = null;
+            this.editCancelled = false;
+
+            IsEditing = true;
+
+            string text = initialText;
+
+            if (text == null)
+            {
+                table.Data.TryGetValue((column, row), out text);
+                text = text ?? string.Empty;
+            }
+
+            EditingBox.Text = text;
+            EditingBox.SelectionStart = text.Length;
+            EditingBox.SelectionEnd = text.Length;
+            EditingBox.Focus();
+
+            return true;
+        }
+
+        /// <summary>
+        /// Commits the pending edit: the text of the editing box is validated, written to the cell
+        /// (recording one undo step) and <see cref="CellEditEnded"/> is raised. It does nothing when
+        /// no edit is in progress.
+        /// </summary>
+        /// <returns><see langword="true"/> when an edit was pending and has been committed.</returns>
+        public bool CommitEdit()
+        {
+            if (!IsEditing)
+            {
+                return false;
+            }
+
+            this.CommitEditCore();
+            return true;
+        }
+
+        /// <summary>
+        /// Cancels the pending edit: the cell keeps its previous content and
+        /// <see cref="CellEditEnded"/> is raised with <c>Cancelled = true</c>. It does nothing when no
+        /// edit is in progress.
+        /// </summary>
+        /// <returns><see langword="true"/> when an edit was pending and has been cancelled.</returns>
+        public bool CancelEdit()
+        {
+            if (!IsEditing)
+            {
+                return false;
+            }
+
+            // The same path the Escape key takes: the attempted text is remembered so that the commit
+            // that follows can report it, and the flag tells it to keep the previous content.
+            ContentTable.Data.TryGetValue(this.EditingCell, out string txt);
+
+            this.cancelledEditAttempt = EditingBox.Text;
+            this.editCancelled = true;
+            EditingBox.Text = txt;
+
+            this.CommitEditCore();
+            ContentTable.Focus();
+
+            return true;
+        }
+
+        /// <summary>
+        /// Whether an edit is currently in progress (the editing box is showing).
+        /// </summary>
+        public bool IsEditingCell => IsEditing;
+
+        /// <summary>
+        /// The cell that is being edited, or <c>(-1, -1)</c> when no edit is in progress.
+        /// </summary>
+        public (int column, int row) EditingCellPosition => IsEditing ? this.EditingCell : (-1, -1);
+
+        /// <summary>
+        /// The body of the commit, shared by <see cref="CommitEdit"/> and the automatic commit that
+        /// runs when the editing box loses the focus. It assumes that an edit is in progress.
+        /// </summary>
+        private void CommitEditCore()
+        {
+            string attemptedText = cancelledEditAttempt ?? EditingBox.Text;
+            string newText = attemptedText;
+
+            bool cancelled = editCancelled;
+            bool rejected = false;
+            editCancelled = false;
+            cancelledEditAttempt = null;
+
+            bool present = ContentTable.Data.TryGetValue(this.EditingCell, out string prevVal);
+
+            // Numeric cells validate on commit: an invalid value is rejected, the cell
+            // keeps its previous content and nothing is pushed onto the Undo stack.
+            if (!cancelled && editingNumericCell != null)
+            {
+                if (editingNumericCell.TryValidate(newText, out string normalized, out string error))
+                {
+                    newText = normalized ?? "";
+                }
+                else
+                {
+                    this.RaiseInvalidInput(this.EditingCell.Item1, this.EditingCell.Item2, newText, error);
+                    cancelled = true;
+                    rejected = true;
+                    newText = prevVal ?? "";
+                }
+            }
+
+            if (cancelled)
+            {
+                newText = prevVal ?? "";
+            }
+
+            bool wasFormula = ContentTable.FormulaCells != null &&
+                              ContentTable.FormulaCells.ContainsKey(this.EditingCell);
+
+            if ((present && prevVal != newText) || (!present && !string.IsNullOrEmpty(newText)))
+            {
+                // Handle formula cells
+                if (newText.StartsWith("=") && newText.Length > 1)
+                {
+                    string formula = newText.Substring(1);
+                    var result = this.FormulaEngine.Evaluate(this.EditingCell, formula);
+
+                    // Store raw formula text in Data for serialization
+                    var newData = new Dictionary<(int, int), string>() { { this.EditingCell, newText } };
+                    var prevData = new Dictionary<(int, int), string>();
+                    if (present) prevData[this.EditingCell] = prevVal;
+                    else prevData[this.EditingCell] = null;
+
+                    this.UndoStack.Push(new StackFrame<(int, int), string>(
+                        ImmutableList.Create(new SelectionRange(this.EditingCell)),
+                        prevData, newData));
+                    ContentTable.Data[this.EditingCell] = newText;
+
+                    // Store formula result for display
+                    ContentTable.FormulaCells[this.EditingCell] = result;
+
+                    // Trigger cascade recalculation
+                    var cascadeResults = this.FormulaEngine.CascadeRecalculate(this.EditingCell);
+                    foreach (var kvp in cascadeResults)
+                    {
+                        ContentTable.FormulaCells[kvp.Key] = kvp.Value;
+                    }
+                }
+                else
+                {
+                    // Plain text cell
+                    if (!string.IsNullOrEmpty(newText))
+                    {
+                        this.UndoStack.Push(new StackFrame<(int, int), string>(
+                            ImmutableList.Create(new SelectionRange(this.EditingCell)),
+                            new Dictionary<(int, int), string>() { { this.EditingCell, prevVal } },
+                            new Dictionary<(int, int), string>() { { this.EditingCell, newText } }));
+                        ContentTable.Data[this.EditingCell] = newText;
+                    }
+                    else
+                    {
+                        this.UndoStack.Push(new StackFrame<(int, int), string>(
+                            ImmutableList.Create(new SelectionRange(this.EditingCell)),
+                            new Dictionary<(int, int), string>() { { this.EditingCell, prevVal } },
+                            new Dictionary<(int, int), string>() { { this.EditingCell, null } }));
+                        ContentTable.Data.Remove(this.EditingCell);
+                    }
+
+                    // If this was a formula cell, remove formula data from engine
+                    if (wasFormula)
+                    {
+                        ContentTable.FormulaCells.Remove(this.EditingCell);
+                        this.FormulaEngine.RemoveCell(this.EditingCell);
+                    }
+
+                    // Always trigger cascade recalculation: formula cells that
+                    // reference this cell need to be updated with the new value.
+                    var cascadeResults = this.FormulaEngine.CascadeRecalculate(this.EditingCell);
+                    foreach (var kvp in cascadeResults)
+                    {
+                        ContentTable.FormulaCells[kvp.Key] = kvp.Value;
+                    }
+                }
+
+                this.PushNonDataStackNull();
+                this.ClearRedoStack();
+            }
+
+            IsEditing = false;
+            ContentTable.InvalidateVisual();
+
+            this.RaiseCellEditEnded(this.EditingCell.Item1, this.EditingCell.Item2, prevVal,
+                cancelled ? attemptedText : newText, cancelled, rejected);
+
+            editingNumericCell = null;
+        }
+
+        /// <summary>
+        /// Clears the whole undo / redo history of the spreadsheet. It is meant to be called after the
+        /// content has been replaced wholesale (a template has been opened, a new document has been
+        /// created, ...), when going back to the previous content no longer makes sense.
+        /// </summary>
+        public void ClearUndoHistory()
+        {
+            ClearUndoStack();
+            ClearRedoStack();
+
+            this.CanUndo = false;
+            this.CanRedo = false;
         }
 
         internal void ClearUndoStack()
@@ -4083,6 +4786,8 @@ namespace Spreadalonia
             this.UndoStackButtonCell.Clear();
             this.UndoStackTreeCell.Clear();
             this.UndoStackNumericCell.Clear();
+            this.UndoStackCellTextStyles.Clear();
+            this.UndoStackCellBorders.Clear();
 
             this.CanUndo = this.UndoStack.Count > 0;
             this.CanRedo = this.RedoStack.Count > 0;
@@ -4938,6 +5643,233 @@ namespace Spreadalonia
         }
 
         /// <summary>
+        /// Sets the text decoration (underline / strikethrough) of the current selection.
+        /// <para>
+        /// Passing <see cref="CellTextDecoration.None"/> removes the decoration from the selection
+        /// instead of storing a "none" entry, so the dictionary does not grow with empty values. The
+        /// call repaints the sheet and is recorded on the undo stack.
+        /// </para>
+        /// </summary>
+        /// <param name="decoration">The decoration to apply.</param>
+        public void SetTextDecoration(CellTextDecoration decoration)
+        {
+            this.SetTextStyle(this.CurrentSheet, this.Selection, style => style.Decoration = decoration);
+        }
+
+        /// <summary>
+        /// Sets the text decoration (underline / strikethrough) of a range of cells.
+        /// <para>
+        /// Passing <see cref="CellTextDecoration.None"/> removes the decoration of the range. The call
+        /// repaints the sheet when the range belongs to the displayed worksheet and is recorded on
+        /// the undo stack of the displayed worksheet.
+        /// </para>
+        /// </summary>
+        /// <param name="sheet">The worksheet to apply the decoration to.</param>
+        /// <param name="range">The range of cells to apply the decoration to.</param>
+        /// <param name="decoration">The decoration to apply.</param>
+        public void SetTextDecoration(SpreadsheetSheet sheet, SelectionRange range, CellTextDecoration decoration)
+        {
+            this.SetTextStyle(sheet, new SelectionRange[] { range }, style => style.Decoration = decoration);
+        }
+
+        /// <summary>
+        /// Sets whether the text of the current selection wraps onto several lines when it is wider
+        /// than its cell.
+        /// </summary>
+        /// <param name="wrap"><see langword="true"/> to wrap the text, <see langword="false"/> to clip it.</param>
+        public void SetWrap(bool wrap)
+        {
+            this.SetTextStyle(this.CurrentSheet, this.Selection, style => style.Wrap = wrap);
+        }
+
+        /// <summary>
+        /// Sets whether the text of a range of cells wraps onto several lines when it is wider than
+        /// its cell.
+        /// </summary>
+        /// <param name="sheet">The worksheet to apply the option to.</param>
+        /// <param name="range">The range of cells to apply the option to.</param>
+        /// <param name="wrap"><see langword="true"/> to wrap the text, <see langword="false"/> to clip it.</param>
+        public void SetWrap(SpreadsheetSheet sheet, SelectionRange range, bool wrap)
+        {
+            this.SetTextStyle(sheet, new SelectionRange[] { range }, style => style.Wrap = wrap);
+        }
+
+        /// <summary>
+        /// Sets the horizontal indentation of the current selection, in device-independent pixels. It
+        /// only moves a left aligned text; centred and right aligned texts are not affected.
+        /// </summary>
+        /// <param name="indent">The indentation, in device-independent pixels (zero removes it).</param>
+        public void SetIndent(double indent)
+        {
+            this.SetTextStyle(this.CurrentSheet, this.Selection, style => style.Indent = indent > 0 ? indent : 0);
+        }
+
+        /// <summary>
+        /// Sets the horizontal indentation of a range of cells, in device-independent pixels. It only
+        /// moves a left aligned text; centred and right aligned texts are not affected.
+        /// </summary>
+        /// <param name="sheet">The worksheet to apply the option to.</param>
+        /// <param name="range">The range of cells to apply the option to.</param>
+        /// <param name="indent">The indentation, in device-independent pixels (zero removes it).</param>
+        public void SetIndent(SpreadsheetSheet sheet, SelectionRange range, double indent)
+        {
+            this.SetTextStyle(sheet, new SelectionRange[] { range }, style => style.Indent = indent > 0 ? indent : 0);
+        }
+
+        /// <summary>
+        /// Returns the text decoration of the specified cell of the displayed worksheet.
+        /// </summary>
+        /// <param name="column">The column of the cell.</param>
+        /// <param name="row">The row of the cell.</param>
+        /// <returns>The decoration of the cell (<see cref="CellTextDecoration.None"/> when it has none).</returns>
+        public CellTextDecoration GetTextDecoration(int column, int row)
+        {
+            return this.GetTextStyle(this.CurrentSheet, column, row).Decoration;
+        }
+
+        /// <summary>
+        /// Returns whether the text of the specified cell of the displayed worksheet wraps.
+        /// </summary>
+        /// <param name="column">The column of the cell.</param>
+        /// <param name="row">The row of the cell.</param>
+        /// <returns><see langword="true"/> when the text of the cell wraps.</returns>
+        public bool GetWrap(int column, int row)
+        {
+            return this.GetTextStyle(this.CurrentSheet, column, row).Wrap;
+        }
+
+        /// <summary>
+        /// Returns the horizontal indentation of the specified cell of the displayed worksheet.
+        /// </summary>
+        /// <param name="column">The column of the cell.</param>
+        /// <param name="row">The row of the cell.</param>
+        /// <returns>The indentation of the cell, in device-independent pixels.</returns>
+        public double GetIndent(int column, int row)
+        {
+            return this.GetTextStyle(this.CurrentSheet, column, row).Indent;
+        }
+
+        /// <summary>
+        /// Returns the text layout of a cell, falling back to an empty (default) style when the cell
+        /// has no entry.
+        /// </summary>
+        /// <param name="sheet">The worksheet the cell belongs to.</param>
+        /// <param name="column">The column of the cell.</param>
+        /// <param name="row">The row of the cell.</param>
+        /// <returns>The text layout of the cell.</returns>
+        private CellTextStyle GetTextStyle(SpreadsheetSheet sheet, int column, int row)
+        {
+            if (sheet != null && sheet.CellTextStyles.TryGetValue((column, row), out CellTextStyle style) && style != null)
+            {
+                return style;
+            }
+
+            return new CellTextStyle();
+        }
+
+        /// <summary>
+        /// Applies a change to the text layout of every cell of the given ranges, recording the
+        /// previous values on the undo stack (as the other formatting setters do).
+        /// </summary>
+        /// <param name="sheet">The worksheet to apply the change to.</param>
+        /// <param name="ranges">The ranges to apply the change to.</param>
+        /// <param name="apply">The change to apply to each cell style.</param>
+        private void SetTextStyle(SpreadsheetSheet sheet, IEnumerable<SelectionRange> ranges, Action<CellTextStyle> apply)
+        {
+            if (sheet == null || ranges == null || apply == null)
+            {
+                return;
+            }
+
+            Table table = ContentTable;
+            bool isDisplayed = sheet == this.CurrentSheet;
+
+            Dictionary<(int, int), CellTextStyle> previousStyles = new Dictionary<(int, int), CellTextStyle>();
+            Dictionary<(int, int), CellTextStyle> newStyles = new Dictionary<(int, int), CellTextStyle>();
+
+            foreach (SelectionRange range in ranges)
+            {
+                if (range == null)
+                {
+                    continue;
+                }
+
+                for (int column = range.Left; column <= range.Right; column++)
+                {
+                    for (int row = range.Top; row <= range.Bottom; row++)
+                    {
+                        if (previousStyles.ContainsKey((column, row)))
+                        {
+                            continue;
+                        }
+
+                        if (!sheet.CellTextStyles.TryGetValue((column, row), out CellTextStyle previous) || previous == null)
+                        {
+                            previous = new CellTextStyle();
+                        }
+                        else
+                        {
+                            // A snapshot, so that a later edit of the same cell cannot change the entry
+                            // that the undo stack is holding.
+                            previous = previous.Clone();
+                        }
+
+                        previousStyles[(column, row)] = previous;
+
+                        CellTextStyle updated = previous.Clone();
+                        apply(updated);
+
+                        newStyles[(column, row)] = updated.IsDefault ? null : updated;
+                    }
+                }
+            }
+
+            if (isDisplayed)
+            {
+                // Every touched cell keeps its key in both directions: a null value means "the cell has
+                // no entry", which is exactly what StackFrame.Pop removes (and what makes undoing an
+                // edit of a previously unstyled cell restore the absence of the entry, not a default
+                // object).
+                Dictionary<(int, int), CellTextStyle> undoData = new Dictionary<(int, int), CellTextStyle>(previousStyles.Count);
+                Dictionary<(int, int), CellTextStyle> redoData = new Dictionary<(int, int), CellTextStyle>(previousStyles.Count);
+
+                foreach (KeyValuePair<(int, int), CellTextStyle> kvp in previousStyles)
+                {
+                    undoData[kvp.Key] = kvp.Value != null && !kvp.Value.IsDefault ? kvp.Value.Clone() : null;
+                    redoData[kvp.Key] = newStyles.TryGetValue(kvp.Key, out CellTextStyle updatedStyle) ? updatedStyle : null;
+                }
+
+                this.UndoStackCellTextStyles.Push(new StackFrame<(int, int), CellTextStyle>(
+                    ImmutableList.Create<SelectionRange>(ranges.Where(x => x != null).ToArray()),
+                    undoData,
+                    redoData));
+            }
+
+            foreach (KeyValuePair<(int, int), CellTextStyle> kvp in newStyles)
+            {
+                if (kvp.Value == null)
+                {
+                    sheet.CellTextStyles.Remove(kvp.Key);
+                }
+                else
+                {
+                    sheet.CellTextStyles[kvp.Key] = kvp.Value;
+                }
+            }
+
+            if (isDisplayed)
+            {
+                // The text style stack already carries this operation (a real frame was pushed
+                // above), so every other stack gets a placeholder and this one is left alone.
+                this.UndoStack.Push(null);
+                this.PushNonTextStyleStackNull();
+
+                this.ClearRedoStack();
+                table.InvalidateVisual();
+            }
+        }
+
+        /// <summary>
         /// Returns the typeface for the specified cell.
         /// </summary>
         /// <param name="left">The horizontal coordinate of the cell.</param>
@@ -5376,6 +6308,10 @@ namespace Spreadalonia
             // The numeric formats follow the values they belong to, so they are shifted with them.
             sheet.NumericCells = delete ? sheet.NumericCells.DeleteRows(range, numericStack) : sheet.NumericCells.InsertRows(range, numericStack);
 
+            Stack<StackFrame<(int, int), CellTextStyle>> textStyleStack = useUndo ? this.UndoStackCellTextStyles : null;
+            sheet.CellTextStyles = delete ? sheet.CellTextStyles.DeleteRows(range, textStyleStack) : sheet.CellTextStyles.InsertRows(range, textStyleStack);
+
+
             // The formulas have been moved along with their cells; their references still point at
             // the old rows, so they are rewritten now (and the frame of the data stack that was
             // just pushed is patched accordingly, so that undo and redo restore the right text).
@@ -5523,6 +6459,10 @@ namespace Spreadalonia
             sheet.ButtonCells = delete ? sheet.ButtonCells.DeleteColumns(range, buttonStack) : sheet.ButtonCells.InsertColumns(range, buttonStack);
             sheet.TreeCells = delete ? sheet.TreeCells.DeleteColumns(range, treeStack) : sheet.TreeCells.InsertColumns(range, treeStack);
             sheet.NumericCells = delete ? sheet.NumericCells.DeleteColumns(range, numericStack) : sheet.NumericCells.InsertColumns(range, numericStack);
+
+            Stack<StackFrame<(int, int), CellTextStyle>> textStyleStack = useUndo ? this.UndoStackCellTextStyles : null;
+            sheet.CellTextStyles = delete ? sheet.CellTextStyles.DeleteColumns(range, textStyleStack) : sheet.CellTextStyles.InsertColumns(range, textStyleStack);
+
 
             this.ShiftFormulaReferences(sheet, true, index, count, delete, useUndo ? this.UndoStack : null);
 
@@ -5802,6 +6742,9 @@ namespace Spreadalonia
             if (this.CurrentSheet == sheet)
             {
                 this.Selection = ImmutableList.Create(new SelectionRange(index, 0, index + count - 1, sheet.MaxTableHeight));
+
+                // InsertColumns() raises ColumnsInserted itself; raising it here as well would
+                // report the same operation twice.
                 this.InsertColumns();
                 return;
             }
@@ -5809,6 +6752,8 @@ namespace Spreadalonia
             // For a non-current worksheet there is no UI to repaint and no undo stack to keep in
             // sync: the kernel is given a local stack, which is thrown away.
             this.ShiftColumns(sheet, index, count, false, false);
+
+            this.ColumnsInserted?.Invoke(this, new ColumnsChangedEventArgs(sheet, index, count));
         }
 
         /// <summary>
@@ -5829,11 +6774,16 @@ namespace Spreadalonia
             if (this.CurrentSheet == sheet)
             {
                 this.Selection = ImmutableList.Create(new SelectionRange(index, 0, index + count - 1, sheet.MaxTableHeight));
+
+                // DeleteColumns() raises ColumnsDeleted itself; raising it here as well would
+                // report the same operation twice.
                 this.DeleteColumns();
                 return;
             }
 
             this.ShiftColumns(sheet, index, count, true, false);
+
+            this.ColumnsDeleted?.Invoke(this, new ColumnsChangedEventArgs(sheet, index, count));
         }
 
         /// <summary>

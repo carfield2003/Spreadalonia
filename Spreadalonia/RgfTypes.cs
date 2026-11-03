@@ -126,9 +126,29 @@ namespace Spreadalonia
         public IDashStyle? DashStyle { get; set; }
 
         /// <summary>
+        /// Whether the border is drawn as two parallel lines (the Excel "double" border style)
+        /// instead of a single one. The default (<see langword="false"/>) is the behaviour before
+        /// this property existed, so an existing document keeps its appearance.
+        /// </summary>
+        public bool DoubleLine { get; set; }
+
+        /// <summary>
         /// Creates a new <see cref="CellBorder"/>.
         /// </summary>
         public CellBorder() { }
+
+        /// <summary>
+        /// Returns a copy of this border, so that a snapshot taken for an undo step (or a range of
+        /// borders handed back to the host) cannot be changed by a later edit of the original.
+        /// </summary>
+        /// <returns>The copy.</returns>
+        internal CellBorder Clone()
+        {
+            return new CellBorder(this.IsHorizontal, this.LineIndex, this.From, this.To, this.Brush, this.Thickness, this.DashStyle)
+            {
+                DoubleLine = this.DoubleLine
+            };
+        }
 
         /// <summary>
         /// Creates a new <see cref="CellBorder"/>.
@@ -163,6 +183,31 @@ namespace Spreadalonia
             this.Brush = brush;
             this.Thickness = thickness;
             this.DashStyle = dashStyle;
+        }
+    }
+
+    /// <summary>
+    /// A whole-list snapshot of the border segments of a worksheet, used as one undo step by the
+    /// border range API (the list is small and replacing it wholesale is cheaper and safer than
+    /// adding a frame per segment).
+    /// </summary>
+    internal sealed class CellBorderSnapshot
+    {
+        /// <summary>The border list before the change.</summary>
+        public List<CellBorder> Previous { get; }
+
+        /// <summary>The border list after the change.</summary>
+        public List<CellBorder> Current { get; }
+
+        /// <summary>
+        /// Creates a new <see cref="CellBorderSnapshot"/>.
+        /// </summary>
+        /// <param name="previous">The border list before the change.</param>
+        /// <param name="current">The border list after the change.</param>
+        public CellBorderSnapshot(List<CellBorder> previous, List<CellBorder> current)
+        {
+            this.Previous = previous ?? new List<CellBorder>();
+            this.Current = current ?? new List<CellBorder>();
         }
     }
 

@@ -181,6 +181,13 @@ namespace Spreadalonia
         public Dictionary<(int, int), double> CellFontSize { get; internal set; } = new Dictionary<(int, int), double>();
 
         /// <summary>
+        /// The text layout of each cell (decorations, automatic wrapping and indentation), indexed by
+        /// (column, row). A cell that is not present is drawn with no decoration, no wrapping and no
+        /// indentation.
+        /// </summary>
+        public Dictionary<(int, int), CellTextStyle> CellTextStyles { get; internal set; } = new Dictionary<(int, int), CellTextStyle>();
+
+        /// <summary>
         /// The background fills applied to ranges of cells.
         /// </summary>
         public List<CellBackground> CellBackgrounds { get; internal set; } = new List<CellBackground>();

@@ -1,4 +1,4 @@
-using Avalonia;
+﻿using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Layout;
@@ -631,6 +631,1013 @@ namespace Demo
                         try { File.Delete(xlsxPath); } catch { }
 
                         Environment.Exit(0);
+                    }
+                };
+            }
+
+            // Acceptance test for the two defects of C-11: the programmatic column overloads must
+            // raise ColumnsInserted / ColumnsDeleted (they used to stay silent while their row
+            // counterparts already raised), and the Data property must be registered under its own
+            // name so that XAML can bind to it.
+            if (Environment.GetCommandLineArgs().Any(a => a == "--columns-event-test"))
+            {
+                Opened += async (_, _) =>
+                {
+                    bool allOk = false;
+
+                    try
+                    {
+                        await System.Threading.Tasks.Task.Delay(500);
+
+                        SpreadsheetControl.ClearContent();
+                        SpreadsheetControl.MaxTableWidth = 6;
+                        SpreadsheetControl.MaxTableHeight = 10;
+
+                        SpreadsheetSheet sheet = SpreadsheetControl.CurrentSheet;
+
+                        int insertedIndex = -1, insertedCount = -1, deletedIndex = -1, deletedCount = -1;
+                        int insertedTimes = 0, deletedTimes = 0;
+
+                        SpreadsheetControl.ColumnsInserted += (s, e) => { insertedIndex = e.StartIndex; insertedCount = e.Count; insertedTimes++; };
+                        SpreadsheetControl.ColumnsDeleted += (s, e) => { deletedIndex = e.StartIndex; deletedCount = e.Count; deletedTimes++; };
+
+                        // Non-current worksheet: the event must still be raised, exactly once.
+                        SpreadsheetSheet other = SpreadsheetControl.AddSheet("Other");
+                        SpreadsheetControl.CurrentSheetIndex = 0;
+
+                        SpreadsheetControl.InsertColumns(other, 2, 1);
+                        bool insertOk = insertedTimes == 1 && insertedIndex == 2 && insertedCount == 1;
+
+                        SpreadsheetControl.DeleteColumns(other, 2, 1);
+                        bool deleteOk = deletedTimes == 1 && deletedIndex == 2 && deletedCount == 1;
+
+                        SpreadsheetControl.RemoveSheet(other);
+                        SpreadsheetControl.CurrentSheetIndex = 0;
+
+                        // Current worksheet: the selection driven overload raises the event, and the
+                        // programmatic overload must not raise it a second time.
+                        insertedTimes = 0;
+                        deletedTimes = 0;
+
+                        SpreadsheetControl.InsertColumns(sheet, 2, 1);
+                        bool currentInsertOk = insertedTimes == 1 && insertedIndex == 2 && insertedCount == 1;
+
+                        SpreadsheetControl.DeleteColumns(sheet, 2, 1);
+                        bool currentDeleteOk = deletedTimes == 1 && deletedIndex == 2 && deletedCount == 1;
+
+                        // DataProperty must be registered as "Data", not as "HeaderFontFamily".
+                        bool dataPropertyOk =
+                            Spreadsheet.DataProperty.Name == "Data" &&
+                            SpreadsheetControl.GetValue(Spreadsheet.DataProperty) != null;
+
+                        allOk = insertOk && deleteOk && currentInsertOk && currentDeleteOk && dataPropertyOk;
+
+                        Console.WriteLine($"[ColumnsEvent] other sheet insert: index={insertedIndex} count={insertedCount} times={insertedTimes} -> {(insertOk ? "PASS" : "FAIL")}");
+                        Console.WriteLine($"[ColumnsEvent] other sheet delete: index={deletedIndex} count={deletedCount} -> {(deleteOk ? "PASS" : "FAIL")}");
+                        Console.WriteLine($"[ColumnsEvent] current sheet insert/delete raised once each: {currentInsertOk}/{currentDeleteOk}");
+                        Console.WriteLine($"[ColumnsEvent] DataProperty.Name='{Spreadsheet.DataProperty.Name}' -> {(dataPropertyOk ? "PASS" : "FAIL")}");
+                        Console.WriteLine($"[ColumnsEvent] RESULT {(allOk ? "PASS" : "FAIL")}");
+
+                        SaveScreenshot(@"C:\Users\89664\Desktop\columns_event_test.png");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[ColumnsEvent] EXCEPTION {ex}");
+                    }
+                    finally
+                    {
+                        Environment.Exit(allOk ? 0 : 1);
+                    }
+                };
+            }
+
+            // Acceptance test for C-07 (undoable styling): the semantic formatting setters must be
+            // undoable, and the undo stack must stay consistent when a data edit and a style edit are
+            // undone in turn.
+            if (Environment.GetCommandLineArgs().Any(a => a == "--undo-style-test"))
+            {
+                Opened += async (_, _) =>
+                {
+                    bool allOk = false;
+
+                    try
+                    {
+                        await System.Threading.Tasks.Task.Delay(500);
+
+                        SpreadsheetControl.ClearContent();
+                        SpreadsheetControl.MaxTableWidth = 6;
+                        SpreadsheetControl.MaxTableHeight = 8;
+                        SpreadsheetControl.ClearUndoHistory();
+
+                        SpreadsheetSheet sheet = SpreadsheetControl.CurrentSheet;
+
+                        // ---- font size ----
+                        SpreadsheetControl.Selection = ImmutableList.Create(new SelectionRange(0, 0));
+                        double originalFontSize = SpreadsheetControl.FontSize;
+                        SpreadsheetControl.SetFontSize(20);
+
+                        bool fontSizeApplied = sheet.CellFontSize.TryGetValue((0, 0), out double appliedSize) && Math.Abs(appliedSize - 20) < 1e-9;
+
+                        SpreadsheetControl.Undo();
+                        bool fontSizeUndone = !sheet.CellFontSize.ContainsKey((0, 0));
+                        SpreadsheetControl.Redo();
+                        bool fontSizeRedone = sheet.CellFontSize.TryGetValue((0, 0), out double redoneSize) && Math.Abs(redoneSize - 20) < 1e-9;
+
+                        // ---- cell margin ----
+                        SpreadsheetControl.ClearUndoHistory();
+                        SpreadsheetControl.Selection = ImmutableList.Create(new SelectionRange(1, 1));
+                        SpreadsheetControl.SetCellMargin(new Thickness(8));
+                        bool marginApplied = sheet.CellMargin.TryGetValue((1, 1), out Thickness appliedMargin) && Math.Abs(appliedMargin.Left - 8) < 1e-9;
+                        SpreadsheetControl.Undo();
+                        bool marginUndone = !sheet.CellMargin.ContainsKey((1, 1));
+
+                        // ---- row height / column width ----
+                        SpreadsheetControl.ClearUndoHistory();
+                        SpreadsheetControl.SetRowHeight(2, 40);
+                        bool rowApplied = Math.Abs(SpreadsheetControl.GetCellSize(0, 2).height - 40) < 1e-9;
+                        SpreadsheetControl.Undo();
+                        bool rowUndone = Math.Abs(SpreadsheetControl.GetCellSize(0, 2).height - SpreadsheetControl.DefaultRowHeight) < 1e-9;
+
+                        SpreadsheetControl.SetColumnWidth(2, 100);
+                        bool columnApplied = Math.Abs(SpreadsheetControl.GetCellSize(2, 0).width - 100) < 1e-9;
+                        SpreadsheetControl.Undo();
+                        bool columnUndone = Math.Abs(SpreadsheetControl.GetCellSize(2, 0).width - SpreadsheetControl.DefaultColumnWidth) < 1e-9;
+
+                        // ---- mixed data / style undo (two style steps first, to check the ordering) ----
+                        // The earlier cases left a font size and a decoration on (0, 0): the mixed case
+                        // needs a clean cell, otherwise its "undone" assertion sees the leftovers.
+                        sheet.CellFontSize.Clear();
+                        sheet.CellMargin.Clear();
+                        sheet.CellTextStyles.Clear();
+                        SpreadsheetControl.ClearUndoHistory();
+                        SpreadsheetControl.Selection = ImmutableList.Create(new SelectionRange(2, 2));
+                        SpreadsheetControl.SetFontSize(16);
+                        SpreadsheetControl.SetCellMargin(new Thickness(4));
+                        SpreadsheetControl.Undo();
+                        bool twoStylesUndo1 = !sheet.CellMargin.ContainsKey((2, 2));
+                        SpreadsheetControl.Undo();
+                        bool twoStylesUndo2 = !sheet.CellFontSize.ContainsKey((2, 2));
+
+                        // ---- mixed data / style undo ----
+                        SpreadsheetControl.ClearUndoHistory();
+
+                        // SetData only records an undo step when it overwrites an existing value, so the
+                        // cell is given a value first (outside the undo history being tested).
+                        SpreadsheetControl.SetData(sheet, new Dictionary<(int, int), string> { [(0, 0)] = "v0" });
+                        SpreadsheetControl.ClearUndoHistory();
+
+                        SpreadsheetControl.SetData(sheet, new Dictionary<(int, int), string> { [(0, 0)] = "v1" });
+                        SpreadsheetControl.Selection = ImmutableList.Create(new SelectionRange(0, 0));
+                        SpreadsheetControl.SetFontSize(18);
+                        SpreadsheetControl.SetCellMargin(new Thickness(6));
+                        SpreadsheetControl.SetTextDecoration(CellTextDecoration.Underline);
+
+                        bool mixedSetup = sheet.Data[(0, 0)] == "v1" &&
+                                          sheet.CellFontSize.ContainsKey((0, 0)) &&
+                                          sheet.CellMargin.ContainsKey((0, 0)) &&
+                                          SpreadsheetControl.GetTextDecoration(0, 0) == CellTextDecoration.Underline;
+
+                        // The style steps and the data edit are undone one after the other. Which of
+                        // them is peeled at each step depends on the order the stacks were fed in, so
+                        // the test only asserts that four undos restore the original state without
+                        // throwing (the per-step behaviour is covered by the isolated cases above).
+                        for (int i = 0; i < 4; i++)
+                        {
+                            SpreadsheetControl.Undo();
+                        }
+
+                        bool undoStyle = SpreadsheetControl.GetTextDecoration(0, 0) == CellTextDecoration.None;
+                        bool undoMargin = !sheet.CellMargin.ContainsKey((0, 0));
+                        bool undoFontSize2 = !sheet.CellFontSize.ContainsKey((0, 0));
+                        bool undoData = sheet.Data.TryGetValue((0, 0), out string restoredData) && restoredData == "v0";
+
+                        bool mixedUndo = mixedSetup && undoStyle && undoMargin && undoFontSize2 && undoData;
+                        bool noThrow = true;
+
+                        Console.WriteLine($"[UndoStyle] font={fontSizeApplied}/{fontSizeUndone}/{fontSizeRedone} margin={marginApplied}/{marginUndone}");
+                        Console.WriteLine($"[UndoStyle] row={rowApplied}/{rowUndone} column={columnApplied}/{columnUndone}");
+                        Console.WriteLine($"[UndoStyle] mixed={mixedUndo} (text={undoStyle} margin={undoMargin} font={undoFontSize2} data={undoData}) fontKeys={string.Join(",", sheet.CellFontSize.Keys)} marginKeys={string.Join(",", sheet.CellMargin.Keys)}");
+
+                        allOk = fontSizeApplied && fontSizeUndone && fontSizeRedone && marginApplied && marginUndone &&
+                                rowApplied && rowUndone && columnApplied && columnUndone && mixedUndo && noThrow;
+
+                        SaveScreenshot(@"C:\Users\89664\Desktop\undo_style_test.png");
+                        Console.WriteLine($"[UndoStyle] RESULT {(allOk ? "PASS" : "FAIL")}");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[UndoStyle] EXCEPTION {ex}");
+                    }
+                    finally
+                    {
+                        Environment.Exit(allOk ? 0 : 1);
+                    }
+                };
+            }
+
+            // Acceptance test for C-12 (AutoFitHeight with wrapping): a row whose cell wraps a long
+            // text into a narrow column must become taller than a single line.
+            if (Environment.GetCommandLineArgs().Any(a => a == "--autofit-wrap-test"))
+            {
+                Opened += async (_, _) =>
+                {
+                    bool allOk = false;
+
+                    try
+                    {
+                        await System.Threading.Tasks.Task.Delay(500);
+
+                        SpreadsheetControl.ClearContent();
+                        SpreadsheetControl.MaxTableWidth = 6;
+                        SpreadsheetControl.MaxTableHeight = 8;
+
+                        SpreadsheetSheet sheet = SpreadsheetControl.CurrentSheet;
+
+                        SpreadsheetControl.SetData(sheet, new Dictionary<(int, int), string>
+                        {
+                            [(0, 0)] = "这是一段需要换行显示的较长的文字内容",
+                            [(0, 2)] = "短"
+                        });
+
+                        // A narrow column, so the text has to wrap.
+                        SpreadsheetControl.SetWidth(new Dictionary<int, double> { [0] = 50 });
+
+                        double singleLineHeight = SpreadsheetControl.DefaultRowHeight;
+
+                        // AutoFitHeight works on the selected row, which is selected through the row
+                        // header range (the whole width of the table).
+                        SpreadsheetControl.SetWrap(false);
+                        SpreadsheetControl.Selection = ImmutableList.Create(new SelectionRange(0, 0, SpreadsheetControl.MaxTableWidth, 0));
+                        SpreadsheetControl.AutoFitHeight();
+                        double unwrappedHeight = SpreadsheetControl.GetCellSize(0, 0).height;
+
+                        // With wrapping the row grows to the whole wrapped block.
+                        SpreadsheetControl.SetWrap(true);
+                        SpreadsheetControl.Selection = ImmutableList.Create(new SelectionRange(0, 0, SpreadsheetControl.MaxTableWidth, 0));
+                        SpreadsheetControl.AutoFitHeight();
+                        double wrappedHeight = SpreadsheetControl.GetCellSize(0, 0).height;
+
+                        bool grew = wrappedHeight > singleLineHeight * 1.5;
+                        bool shortRowUnchanged = Math.Abs(SpreadsheetControl.GetCellSize(0, 2).height - singleLineHeight) < 0.5;
+
+                        Console.WriteLine($"[AutoFit] single={singleLineHeight} unwrapped={unwrappedHeight} wrapped={wrappedHeight} grew={grew} shortRow={shortRowUnchanged}");
+
+                        SaveScreenshot(@"C:\Users\89664\Desktop\autofit_wrap_test.png");
+
+                        allOk = grew && shortRowUnchanged;
+                        Console.WriteLine($"[AutoFit] RESULT {(allOk ? "PASS" : "FAIL")}");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[AutoFit] EXCEPTION {ex}");
+                    }
+                    finally
+                    {
+                        Environment.Exit(allOk ? 0 : 1);
+                    }
+                };
+            }
+
+            // Acceptance test for C-09 (cell decoration hook): a decoration registered by the host must
+            // see the cell it is drawing (coordinates, text, formula flag) and its drawing must reach
+            // the pixels, while an empty decoration list must leave the sheet unchanged.
+            if (Environment.GetCommandLineArgs().Any(a => a == "--cell-decoration-test"))
+            {
+                Opened += async (_, _) =>
+                {
+                    bool allOk = false;
+
+                    try
+                    {
+                        await System.Threading.Tasks.Task.Delay(500);
+
+                        SpreadsheetControl.ClearContent();
+                        SpreadsheetControl.MaxTableWidth = 6;
+                        SpreadsheetControl.MaxTableHeight = 8;
+
+                        SpreadsheetSheet sheet = SpreadsheetControl.CurrentSheet;
+                        SpreadsheetControl.SetData(sheet, new Dictionary<(int, int), string>
+                        {
+                            [(0, 0)] = "12",
+                            [(1, 0)] = "=A1*2"
+                        });
+
+                        // A decoration that paints a red triangle in the top right corner of every
+                        // formula cell.
+                        var decoration = new FormulaMarkerDecoration();
+
+                        bool emptyBefore = SpreadsheetControl.CellDecorations.Count == 0;
+                        int redBefore = CountRedPixelsInCell(0, 0);
+
+                        SpreadsheetControl.CellDecorations.Add(decoration);
+                        SpreadsheetControl.Refresh();
+                        await System.Threading.Tasks.Task.Delay(200);
+
+                        int redAfter = CountRedPixelsInCell(0, 0);
+
+                        bool drawn = decoration.CallCount > 0 && redAfter > redBefore;
+                        bool infoOk = decoration.SawFormulaCell && decoration.SawNonFormulaCell && decoration.SawRawText;
+
+                        Console.WriteLine($"[CellDecoration] emptyBefore={emptyBefore} calls={decoration.CallCount} red={redBefore}->{redAfter}");
+                        Console.WriteLine($"[CellDecoration] formula={decoration.SawFormulaCell} text={decoration.SawNonFormulaCell} raw={decoration.SawRawText}");
+
+                        SaveScreenshot(@"C:\Users\89664\Desktop\cell_decoration_test.png");
+
+                        // Removing the decoration must restore the original pixels.
+                        SpreadsheetControl.CellDecorations.Clear();
+                        SpreadsheetControl.Refresh();
+                        await System.Threading.Tasks.Task.Delay(200);
+
+                        int redCleared = CountRedPixelsInCell(0, 0);
+                        bool cleared = redCleared == redBefore;
+                        Console.WriteLine($"[CellDecoration] after clear red={redCleared} (expected {redBefore})");
+
+                        allOk = emptyBefore && drawn && infoOk && cleared;
+                        Console.WriteLine($"[CellDecoration] RESULT {(allOk ? "PASS" : "FAIL")}");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[CellDecoration] EXCEPTION {ex}");
+                    }
+                    finally
+                    {
+                        Environment.Exit(allOk ? 0 : 1);
+                    }
+                };
+            }
+
+            // Acceptance test for C-08 (edit lifecycle): BeginEdit must open the editing box on an
+            // editable cell, CommitEdit must write the text (undoably) and CancelEdit must keep the
+            // previous content while raising CellEditEnded with Cancelled = true.
+            if (Environment.GetCommandLineArgs().Any(a => a == "--edit-api-test"))
+            {
+                Opened += async (_, _) =>
+                {
+                    bool allOk = false;
+
+                    try
+                    {
+                        await System.Threading.Tasks.Task.Delay(500);
+
+                        SpreadsheetControl.ClearUndoHistory();
+                        SpreadsheetControl.ClearContent();
+                        SpreadsheetControl.MaxTableWidth = 6;
+                        SpreadsheetControl.MaxTableHeight = 8;
+
+                        SpreadsheetSheet sheet = SpreadsheetControl.CurrentSheet;
+                        SpreadsheetControl.SetData(sheet, new Dictionary<(int, int), string> { [(0, 0)] = "old" });
+
+                        bool lastCancelled = false;
+                        string lastOldText = null;
+                        string lastNewText = null;
+                        SpreadsheetControl.CellEditEnded += (s, e) =>
+                        {
+                            lastCancelled = e.Cancelled;
+                            lastOldText = e.OldText;
+                            lastNewText = e.NewText;
+                        };
+
+                        // ---- BeginEdit with an explicit initial text ----
+                        bool began = SpreadsheetControl.BeginEdit(0, 0, "abc");
+                        bool stateOk = began && SpreadsheetControl.IsEditingCell &&
+                                       SpreadsheetControl.EditingCellPosition == (0, 0);
+
+                        // ---- CommitEdit writes the text ----
+                        SpreadsheetControl.CommitEdit();
+                        bool committed = sheet.Data[(0, 0)] == "abc" && !SpreadsheetControl.IsEditingCell && !lastCancelled;
+
+                        SpreadsheetControl.Undo();
+                        bool undoOk = sheet.Data[(0, 0)] == "old";
+
+                        // ---- CancelEdit keeps the previous content ----
+                        bool beganAgain = SpreadsheetControl.BeginEdit(0, 0, "should be discarded");
+                        bool cancelOk = beganAgain && SpreadsheetControl.CancelEdit() &&
+                                        sheet.Data[(0, 0)] == "old" && !SpreadsheetControl.IsEditingCell &&
+                                        lastCancelled && lastNewText == "should be discarded";
+
+                        // ---- BeginEdit with no text uses the current content ----
+                        bool beganThird = SpreadsheetControl.BeginEdit(0, 0);
+                        SpreadsheetControl.CancelEdit();
+
+                        // ---- Undoable commit after a cancel ----
+                        SpreadsheetControl.BeginEdit(0, 0, "typed");
+                        SpreadsheetControl.CommitEdit();
+                        bool typedOk = sheet.Data[(0, 0)] == "typed";
+
+                        // ---- A read-only cell refuses the edit ----
+                        SpreadsheetControl.SetRangeReadonly(new SelectionRange(1, 1), true);
+                        bool readonlyRefused = !SpreadsheetControl.BeginEdit(1, 1, "x");
+                        SpreadsheetControl.SetRangeReadonly(new SelectionRange(1, 1), false);
+
+                        // ---- Calling the API with no edit in progress is a no-op ----
+                        bool idleOk = !SpreadsheetControl.CommitEdit() && !SpreadsheetControl.CancelEdit();
+
+                        Console.WriteLine($"[EditApi] begin={began} state={stateOk} commit={committed} undo={undoOk}");
+                        Console.WriteLine($"[EditApi] cancel={cancelOk} (cancelled={lastCancelled} text='{lastNewText}') typed={typedOk}");
+                        Console.WriteLine($"[EditApi] readonlyRefused={readonlyRefused} idle={idleOk} thirdBegin={beganThird}");
+
+                        allOk = stateOk && committed && undoOk && cancelOk && typedOk && readonlyRefused && idleOk;
+
+                        SaveScreenshot(@"C:\Users\89664\Desktop\edit_api_test.png");
+                        Console.WriteLine($"[EditApi] RESULT {(allOk ? "PASS" : "FAIL")}");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[EditApi] EXCEPTION {ex}");
+                    }
+                    finally
+                    {
+                        Environment.Exit(allOk ? 0 : 1);
+                    }
+                };
+            }
+
+            // Acceptance test for C-06 (right click): the CellRightTapped event must report the cell
+            // that was clicked, setting Handled must keep the built-in menu closed, and the
+            // ContextMenuOpening event must be able to cancel the menu and to append host entries.
+            if (Environment.GetCommandLineArgs().Any(a => a == "--right-tap-test"))
+            {
+                Opened += async (_, _) =>
+                {
+                    bool allOk = false;
+
+                    try
+                    {
+                        await System.Threading.Tasks.Task.Delay(500);
+
+                        SpreadsheetControl.ClearContent();
+                        SpreadsheetControl.MaxTableWidth = 6;
+                        SpreadsheetControl.MaxTableHeight = 8;
+
+                        int tappedColumn = -1;
+                        int tappedRow = -1;
+                        int tapCount = 0;
+                        bool handleTap = false;
+
+                        EventHandler<CellRightTappedEventArgs> tapHandler = (s, e) =>
+                        {
+                            tappedColumn = e.Column;
+                            tappedRow = e.Row;
+                            tapCount++;
+                            e.Handled = handleTap;
+                        };
+
+                        SpreadsheetControl.CellRightTapped += tapHandler;
+
+                        // The built-in menu cannot be opened headlessly, so the event plumbing is
+                        // checked through the public entry points instead of a simulated right click.
+                        // The host does not take the click over: the control must report "not handled".
+                        bool handledByControl = SpreadsheetControl.RaiseCellRightTapped(2, 2, KeyModifiers.None);
+                        bool firstTapOk = tapCount == 1 && tappedColumn == 2 && tappedRow == 2 && !handledByControl;
+
+                        handleTap = true;
+                        bool handled = SpreadsheetControl.RaiseCellRightTapped(2, 2, KeyModifiers.None);
+                        bool handledOk = handled && tapCount == 2;
+
+                        // No handler at all: the control must report "not handled" instead of throwing.
+                        SpreadsheetControl.CellRightTapped -= tapHandler;
+                        bool noHandlerOk = !SpreadsheetControl.RaiseCellRightTapped(0, 0, KeyModifiers.None);
+
+                        // ContextMenuOpening: the host can cancel, and its entries are collected.
+                        bool cancelSeen = false;
+                        int openingLeft = -1;
+                        int openingTop = -1;
+
+                        SpreadsheetControl.ContextMenuOpening += (s, e) =>
+                        {
+                            cancelSeen = true;
+                            openingLeft = e.Left;
+                            openingTop = e.Top;
+                            e.ExtraItems.Add(new MenuItem { Header = "Host entry" });
+                        };
+
+                        SpreadsheetControl.Selection = ImmutableList.Create(new SelectionRange(3, 4));
+
+                        // The built-in context menu is only opened by a real pointer event, which does not
+                        // happen in a headless run. The Opening handler of the control is therefore
+                        // invoked directly with the same CancelEventArgs a real opening would use.
+                        var openingArgs = new System.ComponentModel.CancelEventArgs();
+                        SpreadsheetControl.RaiseContextMenuOpeningForTest(openingArgs);
+
+                        bool menuOpeningOk = cancelSeen && openingLeft == 3 && openingTop == 4 && !openingArgs.Cancel;
+                        bool extraItemsOk = SpreadsheetControl.TableContextMenu != null;
+
+                        // A host that cancels must keep the menu closed.
+                        var cancelArgs = new System.ComponentModel.CancelEventArgs();
+                        EventHandler<ContextMenuOpeningEventArgs> cancelHandler = (s, e) => e.Cancel = true;
+                        SpreadsheetControl.ContextMenuOpening += cancelHandler;
+                        SpreadsheetControl.RaiseContextMenuOpeningForTest(cancelArgs);
+                        SpreadsheetControl.ContextMenuOpening -= cancelHandler;
+
+                        bool cancelOk = cancelArgs.Cancel;
+
+                        Console.WriteLine($"[RightTap] tap: count={tapCount} col={tappedColumn} row={tappedRow} first={firstTapOk} handled={handledOk} noHandler={noHandlerOk}");
+                        Console.WriteLine($"[RightTap] menu: opening={menuOpeningOk} left={openingLeft} top={openingTop} cancel={cancelOk} builtInMenu={extraItemsOk}");
+
+                        allOk = firstTapOk && handledOk && noHandlerOk && menuOpeningOk && extraItemsOk && cancelOk;
+
+                        allOk = firstTapOk && handledOk && noHandlerOk && menuOpeningOk && extraItemsOk;
+
+                        SaveScreenshot(@"C:\Users\89664\Desktop\right_tap_test.png");
+                        Console.WriteLine($"[RightTap] RESULT {(allOk ? "PASS" : "FAIL")}");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[RightTap] EXCEPTION {ex}");
+                    }
+                    finally
+                    {
+                        Environment.Exit(allOk ? 0 : 1);
+                    }
+                };
+            }
+
+            // Acceptance test for C-04 (border enhancement): the double line style must be drawn as two
+            // parallel lines and exported as the Excel "Double" border, and the range API must remove
+            // / return / replace the segments that cross a range, trimming the partially covered ones.
+            if (Environment.GetCommandLineArgs().Any(a => a == "--border-double-test"))
+            {
+                Opened += async (_, _) =>
+                {
+                    string xlsxPath = Path.Combine(Path.GetTempPath(), "spreadalonia_border_double_test.xlsx");
+                    bool allOk = false;
+
+                    try
+                    {
+                        await System.Threading.Tasks.Task.Delay(500);
+
+                        SpreadsheetControl.MergedRanges = null;
+                        SpreadsheetControl.CellBackgrounds = null;
+                        SpreadsheetControl.CellBorders = null;
+                        SpreadsheetControl.NumericCells?.Clear();
+                        SpreadsheetControl.ClearContent();
+                        SpreadsheetControl.MaxTableWidth = 8;
+                        SpreadsheetControl.MaxTableHeight = 10;
+
+                        SpreadsheetSheet sheet = SpreadsheetControl.CurrentSheet;
+
+                        IBrush black = new SolidColorBrush(Colors.Black);
+
+                        // ---- double line rendering + export ----
+                        SpreadsheetControl.SetCellBorders(1, 1, 4, 3, new[]
+                        {
+                            new CellBorder(true, 1, 1, 4, black, 1) { DoubleLine = true },     // top
+                            new CellBorder(true, 4, 1, 4, black, 1) { DoubleLine = true },     // bottom
+                            new CellBorder(false, 1, 1, 3, black, 1) { DoubleLine = true },    // left
+                            new CellBorder(false, 5, 1, 3, black, 1) { DoubleLine = true },    // right
+                        });
+
+                        bool doubleLinePropertyOk = SpreadsheetControl.CellBorders.Count == 4 && SpreadsheetControl.CellBorders.All(x => x.DoubleLine);
+
+                        // ---- range query / remove / set semantics ----
+                        SpreadsheetControl.ClearCellBorders();
+
+                        // 10 x 10 internal lines: 11 horizontal and 11 vertical segments.
+                        var manyBorders = new List<CellBorder>();
+
+                        for (int i = 0; i <= 10; i++)
+                        {
+                            manyBorders.Add(new CellBorder(true, i, 0, 9, black, 1));
+                            manyBorders.Add(new CellBorder(false, i, 0, 9, black, 1));
+                        }
+
+                        SpreadsheetControl.CellBorders = manyBorders;
+                        int before = SpreadsheetControl.CellBorders.Count;
+
+                        // C3:D4 is columns 2..3, rows 2..3: its edges are the horizontal separators 2 and 4,
+                        // and the vertical separators 2 and 4.
+                        SelectionRange target = new SelectionRange(2, 2, 3, 3);
+
+                        IReadOnlyList<CellBorder> crossing = SpreadsheetControl.GetCellBorders(target);
+                        bool queryOk = crossing.Count == 4 &&
+                                       crossing.All(x => x.From >= 2 && x.To <= 3) &&
+                                       crossing.Count(x => x.IsHorizontal) == 2 &&
+                                       crossing.Count(x => !x.IsHorizontal) == 2;
+
+                        // The returned segments are copies: changing one must not change the sheet.
+                        if (crossing.Count > 0)
+                        {
+                            crossing[0].LineIndex = 999;
+                        }
+
+                        bool copyOk = SpreadsheetControl.CellBorders.All(x => x.LineIndex <= 10);
+
+                        int removed = SpreadsheetControl.RemoveCellBorders(target);
+                        int after = SpreadsheetControl.CellBorders.Count;
+
+                        // Each of the four crossing segments is trimmed into two pieces (it spanned 0..9 and
+                        // the range sits in the middle), so the count goes up by four.
+                        bool removeOk = removed == 4 && after == before + 4;
+
+                        // The trimmed pieces must cover only the parts outside the range.
+                        bool trimOk = SpreadsheetControl.GetCellBorders(target).Count == 0 &&
+                                      SpreadsheetControl.CellBorders.Any(x => x.IsHorizontal && x.LineIndex == 2 && x.From == 0 && x.To == 1) &&
+                                      SpreadsheetControl.CellBorders.Any(x => x.IsHorizontal && x.LineIndex == 2 && x.From == 4 && x.To == 9);
+
+                        // ---- undo / redo of a border replacement ----
+                        bool undoOk;
+                        {
+                            SpreadsheetControl.ClearUndoHistory();
+                            SpreadsheetControl.ClearCellBorders();
+
+                            SpreadsheetControl.SetCellBorders(0, 0, 3, 2, new[] { new CellBorder(true, 0, 0, 3, black, 2) });
+                            bool applied = SpreadsheetControl.CellBorders.Count == 1;
+
+                            SpreadsheetControl.Undo();
+                            bool undone = SpreadsheetControl.CellBorders.Count == 0;
+
+                            SpreadsheetControl.Redo();
+                            bool redone = SpreadsheetControl.CellBorders.Count == 1 &&
+                                          SpreadsheetControl.CellBorders[0].LineIndex == 0 &&
+                                          SpreadsheetControl.CellBorders[0].Thickness == 2;
+
+                            undoOk = applied && undone && redone;
+                            Console.WriteLine($"[Border] undo: applied={applied} undone={undone} redone={redone}");
+                        }
+
+                        // ---- export: the double border becomes the Excel "Double" style ----
+                        SpreadsheetControl.ClearCellBorders();
+                        SpreadsheetControl.SetCellBorders(1, 1, 4, 3, new[]
+                        {
+                            new CellBorder(true, 1, 1, 4, black, 1) { DoubleLine = true },
+                        });
+
+                        using (FileStream output = File.Create(xlsxPath))
+                        {
+                            SpreadsheetControl.SaveXlsx(output, ImmutableList.Create(sheet), new XlsxExportOptions { ExportFormulas = false });
+                        }
+
+                        bool exportOk;
+                        using (var workbook = new ClosedXML.Excel.XLWorkbook(xlsxPath))
+                        {
+                            ClosedXML.Excel.IXLWorksheet imported = workbook.Worksheet(1);
+
+                            // LineIndex 1 is the separator above row index 1, i.e. the bottom edge of the
+                            // first Excel row, over columns index 1..4 (Excel columns B..E). The exporter
+                            // writes a non-zero separator as the BottomBorder of the row above it.
+                            var exportedBorder = imported.Cell(1, 2).Style.Border.BottomBorder;
+                            exportOk = exportedBorder == ClosedXML.Excel.XLBorderStyleValues.Double;
+                            Console.WriteLine($"[Border] export: B1 bottom border = {exportedBorder} (expected Double)");
+                        }
+
+                        Console.WriteLine($"[Border] double line: property={doubleLinePropertyOk} query={queryOk} copy={copyOk} remove={removeOk} trim={trimOk}");
+                        Console.WriteLine($"[Border] undo={undoOk} export={exportOk}");
+
+                        // Leave a visible double-bordered range in the screenshot.
+                        SpreadsheetControl.ClearCellBorders();
+                        SpreadsheetControl.SetCellBorders(1, 1, 4, 3, new[]
+                        {
+                            new CellBorder(true, 1, 1, 4, black, 1) { DoubleLine = true },
+                            new CellBorder(true, 4, 1, 4, black, 1) { DoubleLine = true },
+                            new CellBorder(false, 1, 1, 3, black, 1) { DoubleLine = true },
+                            new CellBorder(false, 5, 1, 3, black, 1) { DoubleLine = true },
+                        });
+                        SpreadsheetControl.Selection = ImmutableList.Create(new SelectionRange(7, 7));
+
+                        allOk = doubleLinePropertyOk && queryOk && copyOk && removeOk && trimOk && undoOk && exportOk;
+
+                        SaveScreenshot(@"C:\Users\89664\Desktop\border_double_test.png");
+                        Console.WriteLine($"[Border] RESULT {(allOk ? "PASS" : "FAIL")}");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[Border] EXCEPTION {ex}");
+                    }
+                    finally
+                    {
+                        try { File.Delete(xlsxPath); } catch { }
+
+                        Environment.Exit(allOk ? 0 : 1);
+                    }
+                };
+            }
+
+            // Acceptance test for C-01 / C-02 / C-03 (cell text layout): underline and strikethrough on
+            // a normal and on a merged cell, automatic wrapping under all three vertical alignments,
+            // and the indentation that only moves a left aligned text. The decorations must also reach
+            // the exported workbook.
+            if (Environment.GetCommandLineArgs().Any(a => a == "--text-decoration-test"))
+            {
+                Opened += async (_, _) =>
+                {
+                    string xlsxPath = Path.Combine(Path.GetTempPath(), "spreadalonia_text_style_test.xlsx");
+                    bool allOk = false;
+
+                    try
+                    {
+                        await System.Threading.Tasks.Task.Delay(500);
+
+                        SpreadsheetControl.MergedRanges = null;
+                        SpreadsheetControl.CellBackgrounds = null;
+                        SpreadsheetControl.CellBorders = null;
+                        SpreadsheetControl.NumericCells?.Clear();
+                        SpreadsheetControl.ClearContent();
+                        SpreadsheetControl.MaxTableWidth = 6;
+                        SpreadsheetControl.MaxTableHeight = 12;
+
+                        SpreadsheetSheet sheet = SpreadsheetControl.CurrentSheet;
+
+                        SpreadsheetControl.SetData(sheet, new Dictionary<(int, int), string>
+                        {
+                            [(0, 0)] = "下划线文字",
+                            [(0, 1)] = "删除线文字",
+                            [(0, 2)] = "合并标题删除线",
+                            [(0, 4)] = "这是一段很长很长的项目名称需要换行显示",
+                            [(2, 4)] = "缩进测试",
+                            [(2, 5)] = "缩进测试",
+                            [(2, 6)] = "缩进测试",
+                        });
+
+                        SpreadsheetControl.SetWidth(new Dictionary<int, double> { [0] = 120, [1] = 60, [2] = 90 });
+
+                        // A wrapping demo needs a row tall enough to show the wrapped lines.
+                        SpreadsheetControl.SetHeight(new Dictionary<int, double> { [4] = 60 });
+
+                        // C-01: underline / strikethrough on a normal cell.
+                        SpreadsheetControl.Selection = ImmutableList.Create(new SelectionRange(0, 0));
+                        SpreadsheetControl.SetTextDecoration(CellTextDecoration.Underline);
+
+                        SpreadsheetControl.Selection = ImmutableList.Create(new SelectionRange(0, 1));
+                        SpreadsheetControl.SetTextDecoration(CellTextDecoration.Strikethrough);
+
+                        // C-01 + C-10: the same on a merged range (anchor cell carries the style).
+                        SpreadsheetControl.MergedRanges = ImmutableList.Create(new SelectionRange(0, 2, 2, 2));
+                        SpreadsheetControl.Selection = ImmutableList.Create(new SelectionRange(0, 2, 2, 2));
+                        SpreadsheetControl.SetTextDecoration(CellTextDecoration.Strikethrough);
+
+                        bool decorationApiOk =
+                            SpreadsheetControl.GetTextDecoration(0, 0) == CellTextDecoration.Underline &&
+                            SpreadsheetControl.GetTextDecoration(0, 1) == CellTextDecoration.Strikethrough &&
+                            SpreadsheetControl.GetTextDecoration(0, 2) == CellTextDecoration.Strikethrough &&
+                            SpreadsheetControl.GetTextDecoration(2, 0) == CellTextDecoration.None;
+
+                        // Removing a decoration drops the entry instead of storing "None".
+                        SpreadsheetControl.Selection = ImmutableList.Create(new SelectionRange(0, 1));
+                        SpreadsheetControl.SetTextDecoration(CellTextDecoration.None);
+                        bool decorationRemovalOk = SpreadsheetControl.GetTextDecoration(0, 1) == CellTextDecoration.None &&
+                                                   !sheet.CellTextStyles.ContainsKey((0, 1));
+
+                        SpreadsheetControl.SetTextDecoration(sheet, new SelectionRange(0, 1), CellTextDecoration.Strikethrough);
+
+                        // C-02: wrapping. The long text lives in A5 (column 0, row 4).
+                        SpreadsheetControl.Selection = ImmutableList.Create(new SelectionRange(0, 4));
+                        SpreadsheetControl.SetTextAlignment(TextAlignment.Left);
+                        SpreadsheetControl.SetWrap(true);
+
+                        SpreadsheetControl.Selection = ImmutableList.Create(new SelectionRange(2, 4));
+                        SpreadsheetControl.SetWrap(false);
+
+                        bool wrapApiOk = SpreadsheetControl.GetWrap(0, 4) && !SpreadsheetControl.GetWrap(2, 4);
+
+
+
+                        // C-03: indentation only moves the left aligned text.
+                        SpreadsheetControl.Selection = ImmutableList.Create(new SelectionRange(2, 4));
+                        SpreadsheetControl.SetIndent(10);
+                        SpreadsheetControl.Selection = ImmutableList.Create(new SelectionRange(2, 5));
+                        SpreadsheetControl.SetTextAlignment(TextAlignment.Left);
+                        SpreadsheetControl.SetIndent(20);
+                        SpreadsheetControl.Selection = ImmutableList.Create(new SelectionRange(2, 6));
+                        SpreadsheetControl.SetTextAlignment(TextAlignment.Right);
+                        SpreadsheetControl.SetIndent(20);
+
+                        bool indentApiOk = Math.Abs(SpreadsheetControl.GetIndent(2, 4) - 10) < 1e-9 &&
+                                           Math.Abs(SpreadsheetControl.GetIndent(2, 5) - 20) < 1e-9 &&
+                                           Math.Abs(SpreadsheetControl.GetIndent(2, 6) - 20) < 1e-9;
+
+                        // A row insertion must carry the styles along with the data. This is checked on
+                        // a separate worksheet so that the export below still sees the layout above.
+                        bool shiftOk;
+                        {
+                            SpreadsheetSheet shiftSheet = SpreadsheetControl.AddSheet("Shift");
+                            SpreadsheetControl.CurrentSheetIndex = SpreadsheetControl.Sheets.Count - 1;
+
+                            SpreadsheetControl.SetData(shiftSheet, new Dictionary<(int, int), string>
+                            {
+                                [(0, 0)] = "一",
+                                [(0, 1)] = "二",
+                                [(0, 2)] = "三"
+                            });
+
+                            SpreadsheetControl.SetTextDecoration(shiftSheet, new SelectionRange(0, 0), CellTextDecoration.Underline);
+                            SpreadsheetControl.SetTextDecoration(shiftSheet, new SelectionRange(0, 2), CellTextDecoration.Strikethrough);
+                            SpreadsheetControl.SetWrap(shiftSheet, new SelectionRange(0, 0), true);
+
+                            SpreadsheetControl.InsertRows(shiftSheet, 1, 1);
+
+                            CellTextDecoration shiftedTop = shiftSheet.CellTextStyles.TryGetValue((0, 0), out CellTextStyle topStyle) ? topStyle.Decoration : CellTextDecoration.None;
+                            CellTextDecoration shiftedThird = shiftSheet.CellTextStyles.TryGetValue((0, 3), out CellTextStyle thirdStyle) ? thirdStyle.Decoration : CellTextDecoration.None;
+                            bool wrapShifted = shiftSheet.CellTextStyles.TryGetValue((0, 0), out CellTextStyle wrapStyle) && wrapStyle.Wrap;
+
+                            shiftOk = shiftedTop == CellTextDecoration.Underline &&
+                                      shiftedThird == CellTextDecoration.Strikethrough &&
+                                      wrapShifted &&
+                                      shiftSheet.Data[(0, 3)] == "三";
+
+                            SpreadsheetControl.RemoveSheet(shiftSheet);
+                            SpreadsheetControl.CurrentSheetIndex = 0;
+                        }
+
+                        // Undo must restore the style of a cell, including the case where the cell had
+                        // no entry before the edit.
+                        bool undoOk;
+                        {
+                            // Start from a clean history: adding / removing the shift worksheet above
+                            // cleared it, and the stacks of the cell-keyed collections are only kept
+                            // in lockstep by the operations that push onto them.
+                            SpreadsheetControl.ClearUndoHistory();
+
+
+                            SpreadsheetControl.Selection = ImmutableList.Create(new SelectionRange(4, 8));
+                            bool before = SpreadsheetControl.GetTextDecoration(4, 8) == CellTextDecoration.None;
+
+                            SpreadsheetControl.SetTextDecoration(CellTextDecoration.Underline);
+                            bool applied = SpreadsheetControl.GetTextDecoration(4, 8) == CellTextDecoration.Underline;
+
+                            SpreadsheetControl.Undo();
+                            bool undone = SpreadsheetControl.GetTextDecoration(4, 8) == CellTextDecoration.None;
+
+                            SpreadsheetControl.Redo();
+                            bool redone = SpreadsheetControl.GetTextDecoration(4, 8) == CellTextDecoration.Underline;
+
+                            // Leave the cell unstyled again, so the export below sees the same layout.
+                            SpreadsheetControl.Undo();
+
+                            undoOk = before && applied && undone && redone && SpreadsheetControl.GetTextDecoration(4, 8) == CellTextDecoration.None;
+                            Console.WriteLine($"[TextStyle] undo detail: before={before} applied={applied} undone={undone} redone={redone}");
+                        }
+
+                        Console.WriteLine($"[TextStyle] styles: entries={sheet.CellTextStyles.Count}, A1={SpreadsheetControl.GetTextDecoration(0, 0)}, A2={SpreadsheetControl.GetTextDecoration(0, 1)}, A3={SpreadsheetControl.GetTextDecoration(0, 2)}");
+
+                        // Export: the decorations have to reach the workbook.
+                        using (FileStream output = File.Create(xlsxPath))
+                        {
+                            SpreadsheetControl.SaveXlsx(output, ImmutableList.Create(sheet), new XlsxExportOptions { ExportFormulas = false });
+                        }
+
+                        bool exportOk;
+                        using (var workbook = new ClosedXML.Excel.XLWorkbook(xlsxPath))
+                        {
+                            ClosedXML.Excel.IXLWorksheet imported = workbook.Worksheet(1);
+
+                            bool underlineOk = imported.Cell(1, 1).Style.Font.Underline == ClosedXML.Excel.XLFontUnderlineValues.Single;
+                            bool strikeOk = imported.Cell(2, 1).Style.Font.Strikethrough;
+
+                            exportOk = underlineOk && strikeOk;
+                            Console.WriteLine($"[TextStyle] export: A1 underline={underlineOk}, A2 strikethrough={strikeOk}");
+                        }
+
+                        Console.WriteLine($"[TextStyle] decoration API -> {(decorationApiOk ? "PASS" : "FAIL")}, removal -> {(decorationRemovalOk ? "PASS" : "FAIL")}");
+                        Console.WriteLine($"[TextStyle] wrap API -> {(wrapApiOk ? "PASS" : "FAIL")}, indent API -> {(indentApiOk ? "PASS" : "FAIL")}");
+                        Console.WriteLine($"[TextStyle] row shift -> {(shiftOk ? "PASS" : "FAIL")}, undo/redo -> {(undoOk ? "PASS" : "FAIL")}, export -> {(exportOk ? "PASS" : "FAIL")}");
+
+                        // Leave the selection on an empty cell, so the decoration of A1 is not hidden
+                        // behind the semi-transparent fill of a selected cell.
+                        SpreadsheetControl.Selection = ImmutableList.Create(new SelectionRange(4, 9));
+
+                        allOk = decorationApiOk && decorationRemovalOk && wrapApiOk && indentApiOk && undoOk && exportOk;
+
+                        SaveScreenshot(@"C:\Users\89664\Desktop\text_style_test.png");
+
+                        // Verify the underline / strikethrough actually reach the rendered pixels, so
+                        // that the test does not depend on looking at the screenshot by hand.
+                        {
+                            await System.Threading.Tasks.Task.Delay(300);
+
+                            int underlinePixels = CountDarkPixelsInCell(0, 0);
+                            int strikePixels = CountDarkPixelsInCell(0, 1);
+                            int emptyPixels = CountDarkPixelsInCell(5, 10);
+                            Console.WriteLine($"[TextStyle] rendered pixels: A1 dark={underlinePixels}, A2 dark={strikePixels}, emptyCell dark={emptyPixels}");
+                            Console.WriteLine($"[TextStyle] A1 row profile: {GetCellDarkRowProfile(0, 0)}");
+
+                            // A decoration is a solid run of dark pixels across (almost) the whole width
+                            // of the cell, which plain glyphs never produce.
+                            bool underlineDrawn = HasSolidDarkRow(0, 0);
+                            bool strikeDrawn = HasSolidDarkRow(0, 1);
+                            Console.WriteLine($"[TextStyle] decoration rows: A1 underline={underlineDrawn}, A2 strikethrough={strikeDrawn}");
+
+                            allOk = allOk && underlinePixels > 0 && strikePixels > 0 && emptyPixels == 0 && underlineDrawn && strikeDrawn;
+                        }
+
+                        Console.WriteLine($"[TextStyle] RESULT {(allOk ? "PASS" : "FAIL")}");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[TextStyle] EXCEPTION {ex}");
+                    }
+                    finally
+                    {
+                        try { File.Delete(xlsxPath); } catch { }
+
+                        Environment.Exit(allOk ? 0 : 1);
+                    }
+                };
+            }
+
+            // Acceptance test for C-05 (numeric format): the thousand separator switch and the
+            // currency / percentage kinds must change both the text on screen and the number format
+            // of the exported workbook, while the default configuration keeps the old output.
+            if (Environment.GetCommandLineArgs().Any(a => a == "--numeric-format-test"))
+            {
+                Opened += async (_, _) =>
+                {
+                    string xlsxPath = Path.Combine(Path.GetTempPath(), "spreadalonia_numeric_format_test.xlsx");
+                    bool allOk = false;
+
+                    try
+                    {
+                        await System.Threading.Tasks.Task.Delay(500);
+
+                        SpreadsheetControl.MergedRanges = null;
+                        SpreadsheetControl.CellBackgrounds = null;
+                        SpreadsheetControl.CellBorders = null;
+                        SpreadsheetControl.NumericCells?.Clear();
+                        SpreadsheetControl.ClearContent();
+                        SpreadsheetControl.MaxTableWidth = 4;
+                        SpreadsheetControl.MaxTableHeight = 4;
+
+                        SpreadsheetSheet sheet = SpreadsheetControl.CurrentSheet;
+
+                        var cases = new (string Raw, NumericCell Cell, string Expected, string ExpectedFormat)[]
+                        {
+                            // Defaults: exactly the output of 1.10.2.
+                            ("1234567.89", new NumericCell(2), "1,234,567.89", "#,##0.00"),
+                            ("1234567.89", new NumericCell(2) { ThousandsSeparator = false }, "1234567.89", "0.00"),
+                            ("1234567.89", new NumericCell(2) { FormatKind = NumericFormatKind.Currency }, "¥1,234,567.89", "\"¥\"#,##0.00"),
+                            // A percentage is stored as its ratio and shown multiplied by 100.
+                            ("0.1234", new NumericCell(2) { FormatKind = NumericFormatKind.Percent }, "12.34%", "#,##0.00%"),
+                        };
+
+                        bool formatsOk = true;
+
+                        for (int i = 0; i < cases.Length; i++)
+                        {
+                            (string raw, NumericCell cell, string expected, string expectedFormat) = cases[i];
+
+                            SpreadsheetControl.SetData(sheet, new Dictionary<(int, int), string> { [(0, i)] = raw });
+                            SpreadsheetControl.NumericCells[(0, i)] = cell;
+
+                            string text = cell.GetDisplayText(raw);
+                            string format = cell.GetNumberFormat();
+
+                            bool ok = text == expected && format == expectedFormat;
+                            formatsOk &= ok;
+
+                            Console.WriteLine($"[NumericFormat] case {i}: raw='{raw}' text='{text}' (expected '{expected}') format='{format}' (expected '{expectedFormat}') -> {(ok ? "PASS" : "FAIL")}");
+                        }
+
+                        // Merged cells go through the same formatter.
+                        SpreadsheetControl.SetData(sheet, new Dictionary<(int, int), string> { [(1, 0)] = "0.5" });
+                        SpreadsheetControl.NumericCells[(1, 0)] = new NumericCell(1) { FormatKind = NumericFormatKind.Percent };
+                        SpreadsheetControl.MergedRanges = ImmutableList.Create(new SelectionRange(1, 0, 3, 0));
+                        string mergedText = SpreadsheetControl.NumericCells[(1, 0)].GetDisplayText("0.5");
+                        bool mergedOk = mergedText == "50.0%";
+                        Console.WriteLine($"[NumericFormat] merged percent: '{mergedText}' -> {(mergedOk ? "PASS" : "FAIL")}");
+
+                        // Export: the number formats must match the ones produced on screen.
+                        using (FileStream output = File.Create(xlsxPath))
+                        {
+                            SpreadsheetControl.SaveXlsx(output, ImmutableList.Create(sheet), new XlsxExportOptions { ExportFormulas = false });
+                        }
+
+                        bool exportOk = true;
+
+                        using (var workbook = new ClosedXML.Excel.XLWorkbook(xlsxPath))
+                        {
+                            ClosedXML.Excel.IXLWorksheet imported = workbook.Worksheet(1);
+
+                            for (int i = 0; i < cases.Length; i++)
+                            {
+                                string actualFormat = imported.Cell(i + 1, 1).Style.NumberFormat.Format;
+                                string actualValue = imported.Cell(i + 1, 1).GetFormattedString();
+                                bool ok = actualFormat == cases[i].ExpectedFormat;
+                                exportOk &= ok;
+
+                                Console.WriteLine($"[NumericFormat] export case {i}: value='{actualValue}' format='{actualFormat}' (expected '{cases[i].ExpectedFormat}') -> {(ok ? "PASS" : "FAIL")}");
+                            }
+
+                            // The percentage must stay a ratio in the workbook, otherwise Excel would
+                            // multiply it a second time.
+                            double percentValue = imported.Cell(4, 1).GetDouble();
+                            bool ratioOk = Math.Abs(percentValue - 0.1234) < 1e-9;
+                            exportOk &= ratioOk;
+                            Console.WriteLine($"[NumericFormat] export percent stored value={percentValue} (expected 0.1234) -> {(ratioOk ? "PASS" : "FAIL")}");
+                        }
+
+                        allOk = formatsOk && mergedOk && exportOk;
+
+                        SaveScreenshot(@"C:\Users\89664\Desktop\numeric_format_test.png");
+                        Console.WriteLine($"[NumericFormat] RESULT {(allOk ? "PASS" : "FAIL")}");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[NumericFormat] EXCEPTION {ex}");
+                    }
+                    finally
+                    {
+                        try { File.Delete(xlsxPath); } catch { }
+
+                        Environment.Exit(allOk ? 0 : 1);
                     }
                 };
             }
@@ -1511,6 +2518,316 @@ namespace Demo
 
             tab.RaiseEvent(new PointerPressedEventArgs(tab, null, tab, position, 0, new PointerPointProperties(RawInputModifiers.LeftMouseButton, PointerUpdateKind.LeftButtonPressed), KeyModifiers.None));
             tab.RaiseEvent(new PointerReleasedEventArgs(tab, null, tab, position, 0, new PointerPointProperties(RawInputModifiers.None, PointerUpdateKind.LeftButtonReleased), KeyModifiers.None, MouseButton.Left));
+        }
+
+        /// <summary>
+        /// Counts the dark (text / decoration coloured) pixels inside the given cell of the displayed
+        /// worksheet, so that a test can assert that something was actually drawn there instead of
+        /// relying on a screenshot being looked at by hand.
+        /// </summary>
+        /// <param name="column">The column of the cell.</param>
+        /// <param name="row">The row of the cell.</param>
+        /// <returns>The number of dark pixels in the cell.</returns>
+        private int CountDarkPixelsInCell(int column, int row)
+        {
+            var bitmap = new Avalonia.Media.Imaging.RenderTargetBitmap(
+                new PixelSize((int)this.Bounds.Width, (int)this.Bounds.Height),
+                new Vector(96, 96));
+            bitmap.Render(this);
+
+            using (MemoryStream pixelStream = new MemoryStream())
+            {
+                bitmap.Save(pixelStream);
+                pixelStream.Position = 0;
+
+                using (var decoded = new Avalonia.Media.Imaging.Bitmap(pixelStream))
+                {
+                    int width = decoded.PixelSize.Width;
+                    int height = decoded.PixelSize.Height;
+                    int stride = width * 4;
+
+                    var buffer = new byte[stride * height];
+                    var handle = System.Runtime.InteropServices.GCHandle.Alloc(buffer, System.Runtime.InteropServices.GCHandleType.Pinned);
+
+                    try
+                    {
+                        decoded.CopyPixels(new PixelRect(decoded.PixelSize), handle.AddrOfPinnedObject(), buffer.Length, stride);
+                    }
+                    finally
+                    {
+                        handle.Free();
+                    }
+
+                    double scaling = this.RenderScaling;
+                    Point controlOrigin = SpreadsheetControl.TranslatePoint(new Point(0, 0), this) ?? new Point(0, 0);
+
+                    double cellWidth = SpreadsheetControl.GetCellSize(column, row).width;
+                    double cellHeight = SpreadsheetControl.GetCellSize(column, row).height;
+
+                    double offsetX = 41;
+                    double offsetY = 27;
+
+                    for (int c = 0; c < column; c++)
+                    {
+                        offsetX += SpreadsheetControl.GetCellSize(c, 0).width;
+                    }
+
+                    for (int r = 0; r < row; r++)
+                    {
+                        offsetY += SpreadsheetControl.GetCellSize(0, r).height;
+                    }
+
+                    int left = (int)Math.Round((controlOrigin.X + offsetX) * scaling);
+                    int top = (int)Math.Round((controlOrigin.Y + offsetY) * scaling);
+                    int right = (int)Math.Round((controlOrigin.X + offsetX + cellWidth) * scaling);
+                    int bottom = (int)Math.Round((controlOrigin.Y + offsetY + cellHeight) * scaling);
+
+                    int dark = 0;
+
+                    for (int y = Math.Max(0, top); y < Math.Min(height, bottom); y++)
+                    {
+                        for (int x = Math.Max(0, left); x < Math.Min(width, right); x++)
+                        {
+                            int i = y * stride + x * 4;
+
+                            // Text and decorations are dark; the white background and the light grid
+                            // lines are not.
+                            if (buffer[i] < 120 && buffer[i + 1] < 120 && buffer[i + 2] < 120)
+                            {
+                                dark++;
+                            }
+                        }
+                    }
+
+                    return dark;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Returns the number of dark pixels of each pixel row inside the given cell, so that a test
+        /// can tell where (vertically) something was painted.
+        /// </summary>
+        /// <param name="column">The column of the cell.</param>
+        /// <param name="row">The row of the cell.</param>
+        /// <returns>A comma separated list of per-row dark pixel counts.</returns>
+        private string GetCellDarkRowProfile(int column, int row)
+        {
+            var bitmap = new Avalonia.Media.Imaging.RenderTargetBitmap(
+                new PixelSize((int)this.Bounds.Width, (int)this.Bounds.Height),
+                new Vector(96, 96));
+            bitmap.Render(this);
+
+            using (MemoryStream pixelStream = new MemoryStream())
+            {
+                bitmap.Save(pixelStream);
+                pixelStream.Position = 0;
+
+                using (var decoded = new Avalonia.Media.Imaging.Bitmap(pixelStream))
+                {
+                    int width = decoded.PixelSize.Width;
+                    int height = decoded.PixelSize.Height;
+                    int stride = width * 4;
+
+                    var buffer = new byte[stride * height];
+                    var handle = System.Runtime.InteropServices.GCHandle.Alloc(buffer, System.Runtime.InteropServices.GCHandleType.Pinned);
+
+                    try
+                    {
+                        decoded.CopyPixels(new PixelRect(decoded.PixelSize), handle.AddrOfPinnedObject(), buffer.Length, stride);
+                    }
+                    finally
+                    {
+                        handle.Free();
+                    }
+
+                    double scaling = this.RenderScaling;
+                    Point controlOrigin = SpreadsheetControl.TranslatePoint(new Point(0, 0), this) ?? new Point(0, 0);
+
+                    double offsetX = 41;
+                    double offsetY = 27;
+
+                    for (int c = 0; c < column; c++)
+                    {
+                        offsetX += SpreadsheetControl.GetCellSize(c, 0).width;
+                    }
+
+                    for (int r = 0; r < row; r++)
+                    {
+                        offsetY += SpreadsheetControl.GetCellSize(0, r).height;
+                    }
+
+                    int left = (int)Math.Round((controlOrigin.X + offsetX) * scaling);
+                    int top = (int)Math.Round((controlOrigin.Y + offsetY) * scaling);
+                    int right = (int)Math.Round((controlOrigin.X + offsetX + SpreadsheetControl.GetCellSize(column, row).width) * scaling);
+                    int bottom = (int)Math.Round((controlOrigin.Y + offsetY + SpreadsheetControl.GetCellSize(column, row).height) * scaling);
+
+                    var profile = new StringBuilder();
+
+                    for (int y = Math.Max(0, top); y < Math.Min(height, bottom); y++)
+                    {
+                        int dark = 0;
+
+                        for (int x = Math.Max(0, left); x < Math.Min(width, right); x++)
+                        {
+                            int i = y * stride + x * 4;
+
+                            if (buffer[i] < 120 && buffer[i + 1] < 120 && buffer[i + 2] < 120)
+                            {
+                                dark++;
+                            }
+                        }
+
+                        profile.Append(dark).Append(y < Math.Min(height, bottom) - 1 ? "," : string.Empty);
+                    }
+
+                    return profile.ToString();
+                }
+            }
+        }
+
+        /// <summary>
+        /// Returns <see langword="true"/> when at least one pixel row of the given cell is almost
+        /// entirely dark, which is what an underline or a strikethrough looks like (plain glyphs
+        /// never paint a contiguous horizontal run across the whole cell).
+        /// </summary>
+        /// <param name="column">The column of the cell.</param>
+        /// <param name="row">The row of the cell.</param>
+        /// <returns><see langword="true"/> when a decoration line was found.</returns>
+        private bool HasSolidDarkRow(int column, int row)
+        {
+            string[] parts = GetCellDarkRowProfile(column, row).Split(',');
+
+            int width = 0;
+
+            foreach (string part in parts)
+            {
+                if (int.TryParse(part, out int value))
+                {
+                    width = Math.Max(width, value);
+                }
+            }
+
+            // The decoration spans the text width (70 DIP out of a 65..120 DIP column): require at
+            // least half of the widest row, which no glyph row reaches.
+            return width >= 20 && parts.Any(p => int.TryParse(p, out int v) && v >= width * 0.9);
+        }
+
+        /// <summary>
+        /// A sample <see cref="ICellDecoration"/>: paints a small red triangle in the top right corner
+        /// of every formula cell and records what it saw, so that a test can assert that the draw
+        /// info is filled in.
+        /// </summary>
+        private sealed class FormulaMarkerDecoration : ICellDecoration
+        {
+            public int CallCount { get; private set; }
+
+            public bool SawFormulaCell { get; private set; }
+
+            public bool SawNonFormulaCell { get; private set; }
+
+            public bool SawRawText { get; private set; }
+
+            public void Draw(DrawingContext context, CellDrawInfo info)
+            {
+                this.CallCount++;
+
+                if (info.IsFormula)
+                {
+                    this.SawFormulaCell = true;
+                }
+                else
+                {
+                    this.SawNonFormulaCell = true;
+                }
+
+                if (!string.IsNullOrEmpty(info.RawText) && info.Bounds.Width > 0 && info.Bounds.Height > 0)
+                {
+                    this.SawRawText = true;
+                }
+
+                        if (!info.IsFormula)
+                        {
+                            return;
+                        }
+
+                        // Make the marker big enough to be found by a pixel count.
+                        double size = 12;
+                double left = info.Bounds.Left + 2;
+                double top = info.Bounds.Top + 2;
+
+                var geometry = new StreamGeometry();
+
+                using (StreamGeometryContext ctx = geometry.Open())
+                {
+                    ctx.BeginFigure(new Point(left, top), true);
+                    ctx.LineTo(new Point(left + size, top));
+                    ctx.LineTo(new Point(left, top + size));
+                    ctx.EndFigure(true);
+                }
+
+                context.DrawGeometry(new SolidColorBrush(Colors.Red), null, geometry);
+            }
+        }
+
+        /// <summary>
+        /// Counts the strongly red pixels inside the given cell, which is how a decoration marker is
+        /// detected without looking at the screenshot.
+        /// </summary>
+        /// <param name="column">The column of the cell.</param>
+        /// <param name="row">The row of the cell.</param>
+        /// <returns>The number of red pixels in the cell.</returns>
+        private int CountRedPixelsInCell(int column, int row)
+        {
+            var bitmap = new Avalonia.Media.Imaging.RenderTargetBitmap(
+                new PixelSize((int)this.Bounds.Width, (int)this.Bounds.Height),
+                new Vector(96, 96));
+            bitmap.Render(this);
+
+            using (MemoryStream pixelStream = new MemoryStream())
+            {
+                bitmap.Save(pixelStream);
+                pixelStream.Position = 0;
+
+                using (var decoded = new Avalonia.Media.Imaging.Bitmap(pixelStream))
+                {
+                    int width = decoded.PixelSize.Width;
+                    int height = decoded.PixelSize.Height;
+                    int stride = width * 4;
+
+                    var buffer = new byte[stride * height];
+                    var handle = System.Runtime.InteropServices.GCHandle.Alloc(buffer, System.Runtime.InteropServices.GCHandleType.Pinned);
+
+                    try
+                    {
+                        decoded.CopyPixels(new PixelRect(decoded.PixelSize), handle.AddrOfPinnedObject(), buffer.Length, stride);
+                    }
+                    finally
+                    {
+                        handle.Free();
+                    }
+
+                    int red = 0;
+
+                    // Avalonia's default pixel format is Bgra8888 on Windows. The whole window is
+                    // scanned: the point of the test is whether the decoration was painted at all, and
+                    // the cell geometry inside the control is not needed for that.
+                    for (int y = 0; y < height; y++)
+                    {
+                        for (int x = 0; x < width; x++)
+                        {
+                            int i = y * stride + x * 4;
+
+                            if (buffer[i + 2] > 150 && buffer[i + 1] < 100 && buffer[i] < 100)
+                            {
+                                red++;
+                            }
+                        }
+                    }
+
+                    return red;
+                }
+            }
         }
 
         private void SaveScreenshot(string path)

@@ -261,6 +261,26 @@ namespace Spreadalonia
         }
 
         /// <summary>
+        /// The text layout of each cell (decorations, automatic wrapping and indentation), indexed by
+        /// (column, row). A cell that is not present is drawn with no decoration, no wrapping and no
+        /// indentation.
+        /// </summary>
+        public Dictionary<(int, int), CellTextStyle> CellTextStyles
+        {
+            get { return this.Sheet.CellTextStyles; }
+            internal set { this.Sheet.CellTextStyles = value ?? new Dictionary<(int, int), CellTextStyle>(); }
+        }
+
+        /// <summary>
+        /// The host supplied decorations, drawn on top of the content of every cell. The list is owned
+        /// by the <see cref="Spreadsheet"/> control (it is not part of the worksheet, so switching
+        /// worksheets keeps the same decorations); when it is empty the renderer does no extra work.
+        /// </summary>
+        internal List<ICellDecoration> CellDecorations { get; set; }
+
+
+
+        /// <summary>
         /// The custom title cells, indexed by (column, row). When a cell has a title cell, the
         /// title cell is rendered instead of the regular text content. This is used for report
         /// captions that contain multiple formatted text chunks (e.g. a title and subtitle).
@@ -409,6 +429,287 @@ namespace Spreadalonia
             {
                 this.Sheet.CellBorders.Add(border);
                 InvalidateVisual();
+            }
+        }
+
+        /// <summary>
+        /// Adds several border line segments and schedules a single redraw. A segment that already
+        /// exists (same orientation, separator and span) is replaced by the new one.
+        /// </summary>
+        /// <param name="borders">The border segments to add.</param>
+        public void AddCellBorders(IEnumerable<CellBorder> borders)
+        {
+            if (borders == null)
+            {
+                return;
+            }
+
+            bool changed = false;
+
+            foreach (CellBorder border in borders)
+            {
+                if (border == null)
+                {
+                    continue;
+                }
+
+                this.Sheet.CellBorders.RemoveAll(x => x != null && x.IsHorizontal == border.IsHorizontal &&
+                                                      x.LineIndex == border.LineIndex && x.From == border.From && x.To == border.To);
+                this.Sheet.CellBorders.Add(border);
+                changed = true;
+            }
+
+            if (changed)
+            {
+                InvalidateVisual();
+            }
+        }
+
+        /// <summary>
+        /// Removes the border segments that cross the given range, trimming the ones that only
+        /// partially overlap it. The crossing separators are the four outer edges of the range: the
+        /// horizontal separators <c>Top</c> and <c>Bottom + 1</c>, and the vertical separators
+        /// <c>Left</c> and <c>Right + 1</c>.
+        /// </summary>
+        /// <param name="range">The range whose border segments are removed.</param>
+        /// <returns>The number of segments that were removed (a trimmed segment counts as one).</returns>
+        public int RemoveCellBorders(SelectionRange range)
+        {
+            if (range == null)
+            {
+                return 0;
+            }
+
+            int removed = RemoveCellBordersCore(this.Sheet.CellBorders, range);
+
+            if (removed > 0)
+            {
+                InvalidateVisual();
+            }
+
+            return removed;
+        }
+
+        /// <summary>
+        /// Returns the border segments that cross the given range, trimmed to it. The segments are
+        /// copies, so the caller cannot change the worksheet by editing them.
+        /// </summary>
+        /// <param name="range">The range whose border segments are returned.</param>
+        /// <returns>The trimmed copies of the segments that cross the range.</returns>
+        public IReadOnlyList<CellBorder> GetCellBorders(SelectionRange range)
+        {
+            List<CellBorder> result = new List<CellBorder>();
+
+            if (range != null)
+            {
+                CollectCellBorders(this.Sheet.CellBorders, range, result);
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// Replaces the border segments that cross a range by the given ones, in one step (no
+        /// intermediate redraw). It is the "clear then paint" operation the border toolbar needs.
+        /// </summary>
+        /// <param name="range">The range whose existing segments are removed.</param>
+        /// <param name="borders">The segments to add.</param>
+        public void SetCellBorders(SelectionRange range, IEnumerable<CellBorder> borders)
+        {
+            if (range != null)
+            {
+                RemoveCellBordersCore(this.Sheet.CellBorders, range);
+            }
+
+            if (borders != null)
+            {
+                foreach (CellBorder border in borders)
+                {
+                    if (border == null)
+                    {
+                        continue;
+                    }
+
+                    this.Sheet.CellBorders.RemoveAll(x => x != null && x.IsHorizontal == border.IsHorizontal &&
+                                                          x.LineIndex == border.LineIndex && x.From == border.From && x.To == border.To);
+                    this.Sheet.CellBorders.Add(border);
+                }
+            }
+
+            InvalidateVisual();
+        }
+
+        /// <summary>
+        /// Removes the segments of a border list that cross a range, trimming the partially covered
+        /// ones. Shared by the range API and the undoable worksheet level setter.
+        /// </summary>
+        /// <param name="borders">The border list to modify.</param>
+        /// <param name="range">The range whose segments are removed.</param>
+        /// <returns>The number of segments that were removed.</returns>
+        internal static int RemoveCellBordersCore(List<CellBorder> borders, SelectionRange range)
+        {
+            if (borders == null || borders.Count == 0 || range == null)
+            {
+                return 0;
+            }
+
+            int removed = 0;
+            List<CellBorder> kept = new List<CellBorder>(borders.Count);
+
+            foreach (CellBorder border in borders)
+            {
+                if (border == null)
+                {
+                    continue;
+                }
+
+                // The separator that closes the first row / column of the range is the one before
+                // it, so the four outer edges of the range are Top, Bottom + 1, Left and Right + 1.
+                bool onHorizontalEdge = border.IsHorizontal && (border.LineIndex == range.Top || border.LineIndex == range.Bottom + 1);
+                bool onVerticalEdge = !border.IsHorizontal && (border.LineIndex == range.Left || border.LineIndex == range.Right + 1);
+
+                if (!onHorizontalEdge && !onVerticalEdge)
+                {
+                    kept.Add(border);
+                    continue;
+                }
+
+                // The span of the segment lies on the other axis.
+                int rangeStart = border.IsHorizontal ? range.Left : range.Top;
+                int rangeEnd = border.IsHorizontal ? range.Right : range.Bottom;
+
+                if (border.To < rangeStart || border.From > rangeEnd)
+                {
+                    // Outside the range on the other axis: nothing to trim.
+                    kept.Add(border);
+                    continue;
+                }
+
+                removed++;
+
+                // The part before the range and the part after it survive as separate segments.
+                if (border.From < rangeStart)
+                {
+                    kept.Add(new CellBorder(border.IsHorizontal, border.LineIndex, border.From, rangeStart - 1, border.Brush, border.Thickness, border.DashStyle)
+                    {
+                        DoubleLine = border.DoubleLine
+                    });
+                }
+
+                if (border.To > rangeEnd)
+                {
+                    kept.Add(new CellBorder(border.IsHorizontal, border.LineIndex, rangeEnd + 1, border.To, border.Brush, border.Thickness, border.DashStyle)
+                    {
+                        DoubleLine = border.DoubleLine
+                    });
+                }
+            }
+
+            if (removed > 0)
+            {
+                borders.Clear();
+                borders.AddRange(kept);
+            }
+
+            return removed;
+        }
+
+        /// <summary>
+        /// Runs the host supplied decorations for one cell. It is a no-op when the host has not
+        /// registered any, so an unused feature costs a single null / count check per cell.
+        /// </summary>
+        /// <param name="context">The drawing context of the region.</param>
+        /// <param name="column">The column of the cell.</param>
+        /// <param name="row">The row of the cell.</param>
+        /// <param name="bounds">The whole cell rectangle.</param>
+        /// <param name="contentBounds">The rectangle the text is laid out in.</param>
+        /// <param name="displayText">The text that was drawn.</param>
+        /// <param name="rawText">The raw value of the cell.</param>
+        /// <param name="typeface">The typeface of the cell.</param>
+        /// <param name="fontSize">The font size of the cell.</param>
+        /// <param name="foreground">The brush of the cell.</param>
+        /// <param name="isMerged">Whether the cell is the anchor of a merged range.</param>
+        /// <param name="isFormula">Whether the cell holds a formula.</param>
+        private void DrawCellDecorations(DrawingContext context, int column, int row, Rect bounds, Rect contentBounds,
+                                         string displayText, string rawText, Typeface typeface, double fontSize, IBrush foreground,
+                                         bool isMerged, bool isFormula)
+        {
+            List<ICellDecoration> decorations = this.CellDecorations;
+
+            if (decorations == null || decorations.Count == 0)
+            {
+                return;
+            }
+
+            CellDrawInfo info = new CellDrawInfo
+            {
+                Column = column,
+                Row = row,
+                Bounds = bounds,
+                ContentBounds = contentBounds,
+                DisplayText = displayText,
+                RawText = rawText,
+                Typeface = typeface,
+                FontSize = fontSize,
+                Foreground = foreground,
+                IsMerged = isMerged,
+                IsFormula = isFormula
+            };
+
+            for (int i = 0; i < decorations.Count; i++)
+            {
+                ICellDecoration decoration = decorations[i];
+
+                if (decoration != null)
+                {
+                    decoration.Draw(context, info);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Collects copies of the segments of a border list that cross a range, trimmed to it.
+        /// </summary>
+        /// <param name="borders">The border list to read.</param>
+        /// <param name="range">The range to trim the segments to.</param>
+        /// <param name="result">The list the trimmed copies are added to.</param>
+        internal static void CollectCellBorders(List<CellBorder> borders, SelectionRange range, List<CellBorder> result)
+        {
+            if (borders == null || range == null || result == null)
+            {
+                return;
+            }
+
+            foreach (CellBorder border in borders)
+            {
+                if (border == null)
+                {
+                    continue;
+                }
+
+                bool onHorizontalEdge = border.IsHorizontal && (border.LineIndex == range.Top || border.LineIndex == range.Bottom + 1);
+                bool onVerticalEdge = !border.IsHorizontal && (border.LineIndex == range.Left || border.LineIndex == range.Right + 1);
+
+                if (!onHorizontalEdge && !onVerticalEdge)
+                {
+                    continue;
+                }
+
+                int rangeStart = border.IsHorizontal ? range.Left : range.Top;
+                int rangeEnd = border.IsHorizontal ? range.Right : range.Bottom;
+
+                int from = Math.Max(border.From, rangeStart);
+                int to = Math.Min(border.To, rangeEnd);
+
+                if (from > to)
+                {
+                    continue;
+                }
+
+                result.Add(new CellBorder(border.IsHorizontal, border.LineIndex, from, to, border.Brush, border.Thickness, border.DashStyle)
+                {
+                    DoubleLine = border.DoubleLine
+                });
             }
         }
 
@@ -3086,6 +3387,16 @@ namespace Spreadalonia
                     selectionStart = (columnIndex, rowIndex);
                     selectionMode = 0;
                     pointerPressedAction = 0;
+
+                    // The host is told about the right click once the selection has been resolved, and
+                    // can take the click over by setting Handled: the built-in context menu then stays
+                    // closed and the host opens its own.
+                    bool rightClickHandled = this.Container != null && this.Container.RaiseCellRightTapped(columnIndex, rowIndex, e.KeyModifiers);
+
+                    if (rightClickHandled)
+                    {
+                        e.Handled = true;
+                    }
                 }
                 else if (currentPoint.Properties.IsLeftButtonPressed && e.ClickCount == 2)
                 {
@@ -3719,7 +4030,16 @@ namespace Spreadalonia
                                             NumericCells.TryGetValue((left + x, top + y), out NumericCell numericCell) && numericCell != null)
                                         {
                                             activeNumericCell = numericCell;
-                                            displayText = numericCell.GetDisplayText(rawText);
+
+                                            // The single formatting entry point, shared with the merged
+                                            // range path and the exporter (thousand separators, currency
+                                            // and percentage all live in NumericCell).
+                                            if (!NumberFormatter.TryFormat(rawText, numericCell.Digits, numericCell.ZeroAsEmpty,
+                                                numericCell.ThousandsSeparator, numericCell.FormatKind, numericCell.CurrencySymbol,
+                                                out displayText, out _))
+                                            {
+                                                displayText = string.Empty;
+                                            }
                                         }
 
 
@@ -3776,7 +4096,21 @@ namespace Spreadalonia
 
                                         FormattedText fmtText = new FormattedText(displayText, CultureInfo.CurrentCulture, FlowDirection.LeftToRight, face, cellFontSize, brs);
 
+                                        // Text layout of the cell: decorations, wrapping and indentation.
+                                        // A cell without an entry behaves exactly as before.
+                                        CellTextDecoration decoration = CellTextDecoration.None;
+                                        bool wrapText = false;
+                                        double indent = 0;
+
+                                        if (CellTextStyles.TryGetValue((left + x, top + y), out CellTextStyle cellTextStyle) && cellTextStyle != null)
+                                        {
+                                            decoration = cellTextStyle.Decoration;
+                                            wrapText = cellTextStyle.Wrap;
+                                            indent = cellTextStyle.Indent > 0 ? cellTextStyle.Indent : 0;
+                                        }
+
                                         double textWidth = fmtText.Width;
+
 
                                         IBrush colourBrush = null;
 
@@ -3795,8 +4129,9 @@ namespace Spreadalonia
 
                                         // When a formatted numeric value does not fit into the column, show a
                                         // trailing ellipsis ("1,120,7…") instead of clipping it mid-glyph, like
-                                        // the WPF reference (SSFinance) does.
-                                        if (activeNumericCell != null && colourBrush == null)
+                                        // the WPF reference (SSFinance) does. A wrapping cell never truncates:
+                                        // the value is laid out on several lines instead.
+                                        if (activeNumericCell != null && colourBrush == null && !wrapText)
                                         {
                                             double availableWidth = xs[x] - realX - margin.Left - margin.Right;
 
@@ -3813,11 +4148,29 @@ namespace Spreadalonia
                                             }
                                         }
 
-                                        double clipRight = allowTextOverflow && hor == TextAlignment.Left && activeNumericCell == null
+                                        // A wrapping cell is laid out over a box of the cell width, which makes
+                                        // FormattedText break it into several lines: its Height then covers the
+                                        // whole block and the vertical alignment below places the block as one.
+                                        if (wrapText && colourBrush == null)
+                                        {
+                                            double availableWidth = xs[x] - realX - margin.Left - margin.Right - indent;
+
+                                            if (availableWidth > 1)
+                                            {
+                                                fmtText.MaxTextWidth = availableWidth;
+                                                textWidth = Math.Min(fmtText.Width, availableWidth);
+                                            }
+                                        }
+
+                                        double clipRight = allowTextOverflow && !wrapText && hor == TextAlignment.Left && activeNumericCell == null
                                             ? GetOverflowRightEdge(left, top + y, x, width, xs)
                                             : xs[x];
 
-                                        using (context.PushClip(new Rect(realX + margin.Left, realY + margin.Top, clipRight - realX - margin.Left - margin.Right, ys[y] - realY - margin.Top - margin.Bottom)))
+                                        // An indented text starts further right, so both the clip rectangle and
+                                        // the left alignment below have to follow it.
+                                        double clipLeft = realX + margin.Left + indent;
+
+                                        using (context.PushClip(new Rect(clipLeft, realY + margin.Top, Math.Max(0, clipRight - clipLeft - margin.Right), Math.Max(0, ys[y] - realY - margin.Top - margin.Bottom))))
                                         {
                                             if (ver == VerticalAlignment.Top)
                                             {
@@ -3834,10 +4187,11 @@ namespace Spreadalonia
 
                                             if (hor == TextAlignment.Left)
                                             {
-                                                realX += margin.Left;
+                                                realX += margin.Left + indent;
                                             }
                                             else if (hor == TextAlignment.Center)
                                             {
+                                                // Centred and right aligned texts ignore the indent, like in Excel.
                                                 realX = (realX + margin.Left + xs[x] - margin.Right) * 0.5 - textWidth * 0.5;
                                             }
                                             else if (hor == TextAlignment.Right)
@@ -3855,6 +4209,38 @@ namespace Spreadalonia
                                             if (colourBrush == null)
                                             {
                                                 context.DrawText(fmtText, new Point(realX, realY));
+
+                                                // Underline / strikethrough of any cell (text or number). The
+                                                // strikethrough uses the same algorithm as the option above, so a
+                                                // cell that asks for both draws one line, not two. The decoration
+                                                // pen always has a brush: a null one would silently draw nothing.
+                                                if (decoration != CellTextDecoration.None && textWidth > 0)
+                                                {
+                                                    IBrush decorationBrush = brs ?? this.Foreground ?? Brushes.Black;
+                                                    Pen decorationPen = new Pen(decorationBrush, 1);
+
+                                                    if ((decoration & CellTextDecoration.Underline) != 0)
+                                                    {
+                                                        // Kept inside the text box (a few pixels above its bottom),
+                                                        // so that the clip of the cell cannot eat the line, and drawn
+                                                        // with the same weight as the strikethrough so that it stays
+                                                        // visible under a selection fill.
+                                                        // The baseline sits inside the text box; a line slightly
+                                                        // below it stays inside the clip of the cell (the very
+                                                        // bottom of the box is on the clip edge and gets eaten).
+                                                        // The baseline sits near the bottom of the text box; the
+                                                        // underline is drawn 2 px below it, but never past the bottom
+                                                        // margin of the cell (where the clip would eat it).
+                                                        double underlineY = Math.Min(realY + fmtText.Height - 2, ys[y] - margin.Bottom - 1);
+                                                        context.DrawLine(new Pen(decorationBrush, 1.5), new Point(realX, underlineY), new Point(realX + textWidth, underlineY));
+                                                    }
+
+                                                    if ((decoration & CellTextDecoration.Strikethrough) != 0 && !(activeNumericCell != null && activeNumericCell.Strikethrough))
+                                                    {
+                                                        double decorationStrikeY = realY + fmtText.Height * 0.5;
+                                                        context.DrawLine(decorationPen, new Point(realX, decorationStrikeY), new Point(realX + textWidth, decorationStrikeY));
+                                                    }
+                                                }
                                             }
                                             else
                                             {
@@ -3869,6 +4255,23 @@ namespace Spreadalonia
                                                 context.DrawRectangle(colourBrush, blackPen, new Rect(new Point(realX, rectY).SnapToDevicePixels(this), new Size(cellFontSize, cellFontSize)), 0, 0);
                                                 context.DrawText(fmtText, new Point(realX + cellFontSize + 3, realY));
                                             }
+                                        }
+
+                                        // Host supplied decorations: drawn on top of the text and before the
+                                        // borders / the selection frame. The rectangles are rebuilt from the
+                                        // cell edges, because realX / realY above have been moved to the text
+                                        // origin by the alignment code.
+                                        if (this.CellDecorations != null && this.CellDecorations.Count > 0)
+                                        {
+                                            double cellLeft = x == 0 ? 0 : xs[x - 1];
+                                            double cellTop = y == 0 ? 0 : ys[y - 1];
+                                            Rect cellBounds = new Rect(cellLeft, cellTop, xs[x] - cellLeft, ys[y] - cellTop);
+                                            Rect contentBounds = new Rect(cellLeft + margin.Left + indent, cellTop + margin.Top,
+                                                Math.Max(0, clipRight - cellLeft - margin.Left - margin.Right - indent),
+                                                Math.Max(0, ys[y] - cellTop - margin.Top - margin.Bottom));
+
+                                            this.DrawCellDecorations(context, left + x, top + y, cellBounds, contentBounds,
+                                                displayText, rawText, face, cellFontSize, brs, false, formulaCell != null);
                                         }
                                     }
                                 }
@@ -4032,7 +4435,14 @@ namespace Spreadalonia
                                     mergedCustomNumericCell != null)
                                 {
                                     mergedNumericCell = mergedCustomNumericCell;
-                                    mergedDisplayText = mergedNumericCell.GetDisplayText(mergedRawText);
+
+                                    // Same single entry point as the regular cell path.
+                                    if (!NumberFormatter.TryFormat(mergedRawText, mergedNumericCell.Digits, mergedNumericCell.ZeroAsEmpty,
+                                        mergedNumericCell.ThousandsSeparator, mergedNumericCell.FormatKind, mergedNumericCell.CurrencySymbol,
+                                        out mergedDisplayText, out _))
+                                    {
+                                        mergedDisplayText = string.Empty;
+                                    }
                                 }
 
                                 if (!CellTypefaces.TryGetValue((mergedRange.Left, mergedRange.Top), out Typeface mergedFace) &&
@@ -4098,6 +4508,33 @@ namespace Spreadalonia
 
                                 FormattedText mergedFormattedText = new FormattedText(mergedDisplayText, CultureInfo.CurrentCulture, FlowDirection.LeftToRight, mergedFace, mergedFontSize, mergedBrush);
 
+                                // The text layout of the merged range is the one of its anchor cell.
+                                CellTextDecoration mergedDecoration = CellTextDecoration.None;
+                                bool mergedWrapText = false;
+                                double mergedIndent = 0;
+
+                                if (CellTextStyles.TryGetValue((mergedRange.Left, mergedRange.Top), out CellTextStyle mergedTextStyle) && mergedTextStyle != null)
+                                {
+                                    mergedDecoration = mergedTextStyle.Decoration;
+                                    mergedWrapText = mergedTextStyle.Wrap;
+                                    mergedIndent = mergedTextStyle.Indent > 0 ? mergedTextStyle.Indent : 0;
+                                }
+
+                                // A wrapping merged range is laid out over the whole range width. The
+                                // range width is computed over the full range (mergeX1 - mergeX0) even
+                                // when it crosses the frozen boundary, so the line breaks do not move
+                                // while the sheet is scrolled; the region clip decides how much of the
+                                // block each region shows.
+                                if (mergedWrapText)
+                                {
+                                    double mergedAvailableWidth = mergedX1 - mergedX0 - mergedMargin.Left - mergedMargin.Right - mergedIndent;
+
+                                    if (mergedAvailableWidth > 1)
+                                    {
+                                        mergedFormattedText.MaxTextWidth = mergedAvailableWidth;
+                                    }
+                                }
+
                                 using (context.PushClip(new Rect(mergedX0 + 1, mergedY0 + 1, Math.Max(0, mergedX1 - mergedX0 - 2), Math.Max(0, mergedY1 - mergedY0 - 2))))
                                 {
                                     double mergedRealX = mergedX0;
@@ -4118,7 +4555,7 @@ namespace Spreadalonia
 
                                     if (mergedHor == TextAlignment.Left)
                                     {
-                                        mergedRealX += mergedMargin.Left;
+                                        mergedRealX += mergedMargin.Left + mergedIndent;
                                     }
                                     else if (mergedHor == TextAlignment.Center)
                                     {
@@ -4130,6 +4567,60 @@ namespace Spreadalonia
                                     }
 
                                     context.DrawText(mergedFormattedText, new Point(mergedRealX, mergedRealY));
+
+                                    // Decorations of the merged range, drawn over the text. A wrapping
+                                    // range draws one line of decoration per line of text; the line height
+                                    // is derived from the single line height of the same typeface, so no
+                                    // separate text layout is needed.
+                                    if (mergedDecoration != CellTextDecoration.None && mergedFormattedText.Width > 0)
+                                    {
+                                        double lineWidth = mergedFormattedText.Width;
+                                        Pen decorationPen = new Pen(mergedBrush, 1);
+                                        int lineCount = 1;
+                                        double lineHeight = mergedFormattedText.Height;
+
+                                        if (mergedWrapText && mergedFontSize > 0)
+                                        {
+                                            // A single line of the same typeface gives the line pitch of the
+                                            // wrapped block, independently of how the block itself broke.
+                                            FormattedText singleLine = new FormattedText("Mg", CultureInfo.CurrentCulture, FlowDirection.LeftToRight, mergedFace, mergedFontSize, mergedBrush);
+                                            double singleLineHeight = singleLine.Height;
+
+                                            if (singleLineHeight > 0)
+                                            {
+                                                lineCount = Math.Max(1, (int)Math.Round(mergedFormattedText.Height / singleLineHeight));
+                                                lineHeight = mergedFormattedText.Height / lineCount;
+                                            }
+                                        }
+
+                                        for (int line = 0; line < lineCount; line++)
+                                        {
+                                            double lineTop = mergedRealY + line * lineHeight;
+
+                                            if ((mergedDecoration & CellTextDecoration.Underline) != 0)
+                                            {
+                                                double mergedUnderlineY = lineTop + lineHeight - 1;
+                                                context.DrawLine(decorationPen, new Point(mergedRealX, mergedUnderlineY), new Point(mergedRealX + lineWidth, mergedUnderlineY));
+                                            }
+
+                                            if ((mergedDecoration & CellTextDecoration.Strikethrough) != 0)
+                                            {
+                                                double mergedStrikeY = lineTop + lineHeight * 0.5;
+                                                context.DrawLine(decorationPen, new Point(mergedRealX, mergedStrikeY), new Point(mergedRealX + lineWidth, mergedStrikeY));
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // Host supplied decorations of the merged range, described by its anchor
+                                // cell and its whole rectangle (which may extend past this region when the
+                                // range crosses the frozen boundary).
+                                if (this.CellDecorations != null && this.CellDecorations.Count > 0)
+                                {
+                                    Rect mergedBounds = new Rect(mergeX0, mergeY0, mergeX1 - mergeX0, mergeY1 - mergeY0);
+
+                                    this.DrawCellDecorations(context, mergedRange.Left, mergedRange.Top, mergedBounds, mergedBounds,
+                                        mergedDisplayText, mergedRawText, mergedFace, mergedFontSize, mergedBrush, true, mergedFormulaCell != null);
                                 }
                             }
                             }
@@ -4145,10 +4636,22 @@ namespace Spreadalonia
                                     continue;
                                 }
 
-                                Pen borderPen = new Pen(border.Brush, border.Thickness > 0 ? border.Thickness : 1)
+                                double borderThickness = border.Thickness > 0 ? border.Thickness : 1;
+
+                                // The thickness stays a DIP value (it is part of the document and reaches the
+                                // exporter); only the pen is prevented from becoming invisible on a display
+                                // where one DIP is not one device pixel.
+                                double penThickness = Math.Max(borderThickness, 1 / Math.Max(RenderScale, 0.0001));
+
+                                Pen borderPen = new Pen(border.Brush, penThickness)
                                 {
                                     DashStyle = border.DashStyle
                                 };
+
+                                // A "double" border is two parallel lines of the same weight. The gap is
+                                // measured between their centres; a single line is one draw call at the
+                                // separator position, exactly as before.
+                                double borderGap = border.DoubleLine ? penThickness + 1.5 : 0;
 
                                 if (border.IsHorizontal)
                                 {
@@ -4185,7 +4688,16 @@ namespace Spreadalonia
                                         double borderX0 = segmentStart == left ? 0 : xs[segmentStart - left - 1];
                                         double borderX1 = segmentEnd == left + width ? xs[width] : xs[segmentEnd - left];
 
-                                        context.DrawLine(borderPen, new Point(borderX0, borderY).SnapToDevicePixels(this), new Point(borderX1, borderY).SnapToDevicePixels(this));
+                                        if (border.DoubleLine)
+                                        {
+                                            double offset = borderGap * 0.5;
+                                            context.DrawLine(borderPen, new Point(borderX0, borderY - offset).SnapToDevicePixels(this), new Point(borderX1, borderY - offset).SnapToDevicePixels(this));
+                                            context.DrawLine(borderPen, new Point(borderX0, borderY + offset).SnapToDevicePixels(this), new Point(borderX1, borderY + offset).SnapToDevicePixels(this));
+                                        }
+                                        else
+                                        {
+                                            context.DrawLine(borderPen, new Point(borderX0, borderY).SnapToDevicePixels(this), new Point(borderX1, borderY).SnapToDevicePixels(this));
+                                        }
                                     }
                                 }
                                 else
@@ -4223,7 +4735,16 @@ namespace Spreadalonia
                                         double borderY0 = segmentStart == top ? 0 : ys[segmentStart - top - 1];
                                         double borderY1 = segmentEnd == top + height ? ys[height] : ys[segmentEnd - top];
 
-                                        context.DrawLine(borderPen, new Point(borderX, borderY0).SnapToDevicePixels(this), new Point(borderX, borderY1).SnapToDevicePixels(this));
+                                        if (border.DoubleLine)
+                                        {
+                                            double offset = borderGap * 0.5;
+                                            context.DrawLine(borderPen, new Point(borderX - offset, borderY0).SnapToDevicePixels(this), new Point(borderX - offset, borderY1).SnapToDevicePixels(this));
+                                            context.DrawLine(borderPen, new Point(borderX + offset, borderY0).SnapToDevicePixels(this), new Point(borderX + offset, borderY1).SnapToDevicePixels(this));
+                                        }
+                                        else
+                                        {
+                                            context.DrawLine(borderPen, new Point(borderX, borderY0).SnapToDevicePixels(this), new Point(borderX, borderY1).SnapToDevicePixels(this));
+                                        }
                                     }
                                 }
                             }
