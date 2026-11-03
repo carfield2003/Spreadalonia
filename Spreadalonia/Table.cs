@@ -3407,16 +3407,17 @@ namespace Spreadalonia
 
                         // Draw the vertical grid lines, skipping the interior of the merged ranges.
                         // xs[x] is the right edge of the (left + x)-th column, i.e. the separator that
-                        // follows that column, whose index is exactly left + x. Every separator of the
-                        // region has to be drawn, the one after the first column (x = 0) included: the
-                        // left outer edge of the table is not part of this loop, so there is nothing to
-                        // skip here.
+                        // *follows* that column. Separators are numbered by the column they start at
+                        // (0 = the left outer edge of the table, 1 = between columns 0 and 1, ...), so
+                        // the right edge of column (left + x) is separator (left + x + 1). The index has
+                        // to match the coordinate (xs[x]) exactly, otherwise the merged range lookup is
+                        // off by one column and the first separator of a merge is drawn anyway.
                         this.isRenderingHorizontally = true;
                         this.gridSnapOffset = offsetX + (this.TransformToVisual(TopLevel.GetTopLevel(this)) is Matrix xTransform ? xTransform.M31 : 0);
 
                         for (int x = 0; x <= width; x++)
                         {
-                            int lineIndex = left + x;
+                            int lineIndex = left + x + 1;
 
                             foreach ((int segmentStart, int segmentEnd) in GetVisibleLineSegments(top, top + height, lineIndex, false))
                             {
@@ -3435,14 +3436,14 @@ namespace Spreadalonia
                         }
 
                         // Same reasoning for the horizontal grid lines: ys[y] is the bottom edge of the
-                        // (top + y)-th row, i.e. the separator at index top + y, and every one of them
-                        // has to be drawn.
+                        // (top + y)-th row, i.e. the separator that follows it, which is separator
+                        // (top + y + 1).
                         this.isRenderingHorizontally = false;
                         this.gridSnapOffset = offsetY + (this.TransformToVisual(TopLevel.GetTopLevel(this)) is Matrix yTransform ? yTransform.M32 : 0);
 
                         for (int y = 0; y <= height; y++)
                         {
-                            int lineIndex = top + y;
+                            int lineIndex = top + y + 1;
 
                             foreach ((int segmentStart, int segmentEnd) in GetVisibleLineSegments(left, left + width, lineIndex, true))
                             {
@@ -4552,15 +4553,23 @@ namespace Spreadalonia
 
                 if (isHorizontal)
                 {
-                    // lineIndex is the absolute row-separator index (between row lineIndex-1 and lineIndex).
-                    // The separator lies inside the merged range iff lineIndex-1 is one of the merged rows,
-                    // i.e. range.Top < lineIndex && lineIndex <= range.Bottom.
-                    covered = range.Top < lineIndex && range.Bottom >= lineIndex;
+                    // lineIndex is the absolute row-separator index (between row lineIndex - 1 and row
+                    // lineIndex). The separator lies strictly inside the merged range, i.e. it is one of
+                    // the internal separators that have to disappear, iff it is neither the top nor the
+                    // bottom outer edge: range.Top < lineIndex && lineIndex <= range.Bottom.
+                    covered = range.Top < lineIndex && lineIndex <= range.Bottom;
                 }
                 else
                 {
-                    // Same idea for column separators: inside the range iff range.Left < lineIndex <= range.Right.
-                    covered = range.Left < lineIndex && range.Right >= lineIndex;
+                    // Same idea for column separators: strictly inside iff range.Left < lineIndex <= range.Right.
+                    covered = range.Left < lineIndex && lineIndex <= range.Right;
+                }
+
+                // A range of a single cell has no internal separator at all: the rules above would
+                // otherwise treat its trailing edge as internal and erase the line that closes the cell.
+                if (covered && (isHorizontal ? range.Top == range.Bottom : range.Left == range.Right))
+                {
+                    covered = false;
                 }
 
                 if (covered)
