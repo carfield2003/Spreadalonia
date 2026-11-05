@@ -111,9 +111,9 @@ namespace Spreadalonia
         /// <param name="kind">The kind of number format.</param>
         /// <param name="currencySymbol">The currency symbol used by <see cref="NumericFormatKind.Currency"/>.</param>
         /// <returns>The formatted display text.</returns>
-        internal static string Format(string rawData, int digits, bool zeroAsEmpty, bool thousandsSeparator, NumericFormatKind kind, string currencySymbol)
+        internal static string Format(string rawData, int digits, bool zeroAsEmpty, bool thousandsSeparator, NumericFormatKind kind, string currencySymbol, bool negativeRed = false)
         {
-            if (!TryFormat(rawData, digits, zeroAsEmpty, thousandsSeparator, kind, currencySymbol, out string displayText, out _))
+            if (!TryFormat(rawData, digits, zeroAsEmpty, thousandsSeparator, kind, currencySymbol, out string displayText, out _, negativeRed))
             {
                 return string.Empty;
             }
@@ -135,7 +135,7 @@ namespace Spreadalonia
         /// <param name="displayText">The formatted display text (empty when the value cannot be parsed).</param>
         /// <param name="value">The parsed raw value (zero when the value cannot be parsed).</param>
         /// <returns><see langword="true"/> when the raw value could be parsed as a number.</returns>
-        internal static bool TryFormat(string rawData, int digits, bool zeroAsEmpty, bool thousandsSeparator, NumericFormatKind kind, string currencySymbol, out string displayText, out decimal value)
+        internal static bool TryFormat(string rawData, int digits, bool zeroAsEmpty, bool thousandsSeparator, NumericFormatKind kind, string currencySymbol, out string displayText, out decimal value, bool negativeRed = false)
         {
             displayText = string.Empty;
             value = 0m;
@@ -150,7 +150,7 @@ namespace Spreadalonia
                 return true;
             }
 
-            displayText = FormatValue(value, digits, thousandsSeparator, kind, currencySymbol);
+            displayText = FormatValue(value, digits, thousandsSeparator, kind, currencySymbol, negativeRed);
             return true;
         }
 
@@ -181,11 +181,18 @@ namespace Spreadalonia
         /// <param name="kind">The kind of number format.</param>
         /// <param name="currencySymbol">The currency symbol used by <see cref="NumericFormatKind.Currency"/>.</param>
         /// <returns>The formatted display text.</returns>
-        internal static string FormatValue(decimal value, int digits, bool thousandsSeparator, NumericFormatKind kind, string currencySymbol)
+        internal static string FormatValue(decimal value, int digits, bool thousandsSeparator, NumericFormatKind kind, string currencySymbol, bool negativeRed = false)
         {
             if (digits < 0)
             {
                 digits = 0;
+            }
+
+            // The accounting convention for "negative in red": the sign is dropped and the colour
+            // carries the information, so the magnitude is shown for negative values as well.
+            if (negativeRed && value < 0m)
+            {
+                value = -value;
             }
 
             string decimals = digits > 0 ? "." + new string('0', digits) : string.Empty;
@@ -219,7 +226,7 @@ namespace Spreadalonia
         /// <param name="kind">The kind of number format.</param>
         /// <param name="currencySymbol">The currency symbol used by <see cref="NumericFormatKind.Currency"/>.</param>
         /// <returns>The Excel number format string.</returns>
-        internal static string GetNumberFormat(int digits, bool thousandsSeparator, NumericFormatKind kind, string currencySymbol)
+        internal static string GetNumberFormat(int digits, bool thousandsSeparator, NumericFormatKind kind, string currencySymbol, bool negativeRed = false)
         {
             if (digits < 0)
             {
@@ -229,18 +236,17 @@ namespace Spreadalonia
             string decimals = digits > 0 ? "." + new string('0', digits) : string.Empty;
             string group = thousandsSeparator ? "#,##0" : "0";
 
-            switch (kind)
+            // "Negative in red" maps to the two-section Excel format "positive;[Red]positive":
+            // Excel shows the second section for negative values as their absolute value, so the
+            // minus sign disappears on screen exactly like the spreadsheet control draws it.
+            string positive = kind switch
             {
-                case NumericFormatKind.Percent:
-                    return group + decimals + "%";
+                NumericFormatKind.Percent => group + decimals + "%",
+                NumericFormatKind.Currency => "\"" + (currencySymbol ?? string.Empty) + "\"" + group + decimals,
+                _ => group + decimals
+            };
 
-                case NumericFormatKind.Currency:
-                    // Excel treats the quoted symbol as a literal, next to the number.
-                    return "\"" + (currencySymbol ?? string.Empty) + "\"" + group + decimals;
-
-                default:
-                    return group + decimals;
-            }
+            return negativeRed ? positive + ";[Red]" + positive : positive;
         }
 
         /// <summary>
@@ -593,7 +599,7 @@ namespace Spreadalonia
         /// <returns>The formatted display text.</returns>
         public string GetDisplayText(string rawData)
         {
-            return NumberFormatter.Format(rawData, Digits, ZeroAsEmpty, ThousandsSeparator, FormatKind, CurrencySymbol);
+            return NumberFormatter.Format(rawData, Digits, ZeroAsEmpty, ThousandsSeparator, FormatKind, CurrencySymbol, NegativeRed);
         }
 
         /// <summary>
@@ -608,7 +614,7 @@ namespace Spreadalonia
         /// </summary>
         public string GetNumberFormat()
         {
-            return NumberFormatter.GetNumberFormat(Digits, ThousandsSeparator, FormatKind, CurrencySymbol);
+            return NumberFormatter.GetNumberFormat(Digits, ThousandsSeparator, FormatKind, CurrencySymbol, NegativeRed);
         }
 
         /// <summary>

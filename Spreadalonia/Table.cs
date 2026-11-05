@@ -4036,7 +4036,7 @@ namespace Spreadalonia
                                             // and percentage all live in NumericCell).
                                             if (!NumberFormatter.TryFormat(rawText, numericCell.Digits, numericCell.ZeroAsEmpty,
                                                 numericCell.ThousandsSeparator, numericCell.FormatKind, numericCell.CurrencySymbol,
-                                                out displayText, out _))
+                                                out displayText, out _, numericCell.NegativeRed))
                                             {
                                                 displayText = string.Empty;
                                             }
@@ -4439,7 +4439,7 @@ namespace Spreadalonia
                                     // Same single entry point as the regular cell path.
                                     if (!NumberFormatter.TryFormat(mergedRawText, mergedNumericCell.Digits, mergedNumericCell.ZeroAsEmpty,
                                         mergedNumericCell.ThousandsSeparator, mergedNumericCell.FormatKind, mergedNumericCell.CurrencySymbol,
-                                        out mergedDisplayText, out _))
+                                        out mergedDisplayText, out _, mergedNumericCell.NegativeRed))
                                     {
                                         mergedDisplayText = string.Empty;
                                     }
